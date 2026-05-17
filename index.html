@@ -1350,175 +1350,790 @@ const MOCK_EXEC = [
   { name: "计划发送给同行者", icon: "📱", status: "ok", label: "已发送" }
 ];
 
+
 // ══════════════════════════════════════════════════════════════
-// Tool 1: extract_intent
+// Tool 4: plan_itinerary
 // ══════════════════════════════════════════════════════════════
 
-const GLM_API_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
-const GLM_MODEL   = 'glm-4-flash';
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
-const DEEPSEEK_MODEL   = 'deepseek-chat';
-const MAX_CLARIFY_ROUNDS = 2;
-const REQUIRED_FIELDS = ['group_type', 'adults'];
+/**
+ * Tool 4: plan_itinerary
+ * 职责：activities + restaurants 候选 → AI 组合成带时间轴的三段行程
+ * 返回：{ ok, plan: ItineraryPlan, source: 'zhipu'|'deepseek'|'longcat'|'rule' }
+ */
 
-const INTENT_SYSTEM_PROMPT = `你是美团本地出行规划助手的意图解析模块。
-用户发来一句自然语言，描述他们的周末出行需求。
-你的任务是把这句话解析成一个 JSON 对象，只输出 JSON，不要任何解释或 markdown 代码块。
+const PLAN_GLM_URL      = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+const PLAN_DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
+const PLAN_LONGCAT_URL  = 'https://api.longcat.ai/v1/chat/completions';
+const PLAN_GLM_MODEL      = 'glm-4-flash';
+const PLAN_DEEPSEEK_MODEL = 'deepseek-chat';
+const PLAN_LONGCAT_MODEL  = 'longcat-plus';
 
-JSON 结构：
-{"group_type":"family"|"friends"|"couple"|"senior","adults":<整数>,"children":[{"age":<整数>}],"radius_km":<整数>,"start_time":"HH:MM","duration_hours":<整数>,"preferences":["string"],"budget_per_person":<整数或null>,"special_needs":["string"],"missing_fields":["string"]}
-
-解析规则：
-- "老婆最近在减肥" → special_needs加"健康饮食"
-- "孩子5岁" → children:[{"age":5}]，group_type推断为"family"
-- "4个人2男2女" → adults:4，group_type为"friends"
-- "别太远" → radius_km:5
-- 信息充足时missing_fields为[]；缺人数填"adults"，缺场景填"group_type"
-只输出合法JSON。`;
-
-const CLARIFY_QUESTIONS = {
-  adults:     '请问这次出行一共几个人呢？',
-  group_type: '请问是和家人、朋友，还是和另一半出行呢？',
-  start_time: '请问打算几点出发呢？',
-  radius_km:  '请问可以接受离家多远的地方？'
-};
-
-async function callGLM(text, apiKey) {
-  if (!apiKey) throw new Error('GLM Key未配置');
-  const res = await fetch(GLM_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: GLM_MODEL, max_tokens: 512, temperature: 0.1,
-      messages: [{ role: 'system', content: INTENT_SYSTEM_PROMPT }, { role: 'user', content: text }] }),
-    signal: AbortSignal.timeout(8000)
-  });
-  if (!res.ok) throw new Error(`GLM HTTP ${res.status}`);
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? '';
+// ── System Prompt ─────────────────────────────────────────────
+function buildPlanSystemPrompt() {
+  return '你是美团本地出行规划助手的行程编排模块。\n' +
+    '你会收到：用户出行意图(intent) + 活动候选列表(activities) + 餐厅候选列表(restaurants)。\n' +
+    '从候选中挑选最合适的组合，编排"活动→餐厅→活动"三段行程。\n\n' +
+    '只输出合法 JSON，不要任何解释或 markdown 代码块，严格按以下结构：\n' +
+    '{\n' +
+    '  "stops": [\n' +
+    '    {"order":1,"id":"<候选id>","name":"<名称>","category":"activity","arrival_time":"HH:MM","end_time":"HH:MM","reason":"<选择理由15字内>"},\n' +
+    '    {"order":2,"id":"<候选id>","name":"<名称>","category":"restaurant","arrival_time":"HH:MM","end_time":"HH:MM","reason":"<选择理由15字内>"},\n' +
+    '    {"order":3,"id":"<候选id>","name":"<名称>","category":"activity","arrival_time":"HH:MM","end_time":"HH:MM","reason":"<选择理由15字内>"}\n' +
+    '  ],\n' +
+    '  "summary": "<20-40字口语化行程摘要>",\n' +
+    '  "total_cost_estimate": <人均费用整数>,\n' +
+    '  "tips": ["<提示1>","<提示2>"]\n' +
+    '}\n\n' +
+    '编排规则：\n' +
+    '1. 第1站和第3站必须从activities中选，第2站必须从restaurants中选\n' +
+    '2. 第2站arrival_time = 第1站end_time + 15分钟缓冲\n' +
+    '3. 第3站arrival_time = 第2站end_time + 15分钟缓冲\n' +
+    '4. 有孩子时优先选kid_menu=true餐厅和亲子活动\n' +
+    '5. 有健康饮食需求时优先选healthy_score>=4餐厅\n' +
+    '6. 控制总时长在intent.duration_hours小时以内\n' +
+    '7. total_cost_estimate = 餐厅price_per_person * adults + 活动ticket_price * adults';
 }
 
-async function callDeepSeek(text, apiKey) {
-  if (!apiKey) throw new Error('DeepSeek Key未配置');
-  const res = await fetch(DEEPSEEK_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: DEEPSEEK_MODEL, max_tokens: 512, temperature: 0.1,
-      messages: [{ role: 'system', content: INTENT_SYSTEM_PROMPT }, { role: 'user', content: text }] }),
-    signal: AbortSignal.timeout(10000)
+// ── 构建精简上下文（节省 token） ──────────────────────────────
+function buildContext(intent, activities, restaurants) {
+  const intentSlim = {
+    group_type: intent.group_type, adults: intent.adults,
+    children: intent.children, start_time: intent.start_time,
+    duration_hours: intent.duration_hours,
+    special_needs: intent.special_needs, preferences: intent.preferences
+  };
+  const actSlim = activities.slice(0, 6).map(function(a) {
+    return { id: a.id, name: a.name, type: a.type,
+             duration_min: a.duration_min, rating: a.rating,
+             ticket_price: a.ticket_price, tags: a.tags.slice(0, 3) };
   });
-  if (!res.ok) throw new Error(`DeepSeek HTTP ${res.status}`);
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? '';
+  const rstSlim = restaurants.slice(0, 5).map(function(r) {
+    return { id: r.id, name: r.name, cuisine: r.cuisine,
+             price_per_person: r.price_per_person, healthy_score: r.healthy_score,
+             kid_menu: r.kid_menu, wait_text: r.wait_text,
+             reservable: r.reservable, rating: r.rating };
+  });
+  return JSON.stringify({ intent: intentSlim, activities: actSlim, restaurants: rstSlim });
 }
 
-function ruleBasedFallback(text) {
-  const t = text;
-  let group_type = 'friends';
-  if (/孩子|宝宝|亲子|小孩|儿子|女儿/.test(t)) group_type = 'family';
-  else if (/老婆|老公|媳妇|爱人|两个人.*约会|约会/.test(t)) group_type = 'couple';
-  else if (/爸妈|父母|爷爷|奶奶|姥姥|姥爷|长辈|老人/.test(t)) group_type = 'senior';
-  const adultMatch = t.match(/(\d+)\s*[个名位人]/);
-  let adults = adultMatch ? parseInt(adultMatch[1]) : 2;
-  if (group_type === 'couple') adults = 2;
-  const children = [];
-  const childAgeMatches = [...t.matchAll(/孩子\s*(\d+)\s*岁|(\d+)\s*岁.*?孩子/g)];
-  childAgeMatches.forEach(m => { const age = parseInt(m[1] || m[2]); if (!isNaN(age) && age < 18) children.push({ age }); });
-  if (group_type === 'family' && children.length === 0) children.push({ age: 5 });
-  let radius_km = 5;
-  if (/别.*太远|不.*太远|附近|周边/.test(t)) radius_km = 5;
-  else if (/稍微远|可以远/.test(t)) radius_km = 15;
-  else if (/市内|市区/.test(t)) radius_km = 10;
-  const timeMatch = t.match(/(上午|下午|晚上|早上)?\s*(\d{1,2})\s*[点:时]\s*(\d{0,2})/);
-  let start_time = '14:00';
-  if (timeMatch) {
-    const period = timeMatch[1] || '';
-    let h = parseInt(timeMatch[2]);
-    const m2 = (timeMatch[3] || '00').padStart(2, '0');
-    if ((period === '下午' || period === '晚上') && h < 12) h += 12;
-    if (period === '上午' && h === 12) h = 0;
-    start_time = `${String(h).padStart(2,'0')}:${m2}`;
+// ── 主函数 ────────────────────────────────────────────────────
+async function planItinerary(intent, activities, restaurants, options) {
+  options = options || {};
+  var glmApiKey      = options.glmApiKey      || '';
+  var deepseekApiKey = options.deepseekApiKey  || '';
+  var longcatApiKey  = options.longcatApiKey   || '';
+  var onStream       = options.onStream        || null;
+
+  var context = buildContext(intent, activities, restaurants);
+  var systemPrompt = buildPlanSystemPrompt();
+
+  // 构建尝试链（有 key 的才加入）
+  var providers = [];
+  if (glmApiKey)      providers.push({ name: 'zhipu',    fn: function() { return callAI(PLAN_GLM_URL,      PLAN_GLM_MODEL,      glmApiKey,      systemPrompt, context, onStream); } });
+  if (deepseekApiKey) providers.push({ name: 'deepseek', fn: function() { return callAI(PLAN_DEEPSEEK_URL, PLAN_DEEPSEEK_MODEL, deepseekApiKey, systemPrompt, context, null);     } });
+  if (longcatApiKey)  providers.push({ name: 'longcat',  fn: function() { return callAI(PLAN_LONGCAT_URL,  PLAN_LONGCAT_MODEL,  longcatApiKey,  systemPrompt, context, null);     } });
+
+  var lastError = null;
+
+  for (var i = 0; i < providers.length; i++) {
+    var provider = providers[i];
+    try {
+      var raw  = await provider.fn();
+      var plan = parsePlanJSON(raw);
+      validatePlan(plan, activities, restaurants);
+      var enriched = enrichPlan(plan, activities, restaurants);
+      return { ok: true, plan: enriched, source: provider.name };
+    } catch (err) {
+      console.warn('[plan_itinerary] ' + provider.name + ' 失败:', err.message);
+      lastError = err;
+    }
   }
-  const durMatch = t.match(/(\d+)\s*[个]?\s*小时/);
-  const duration_hours = durMatch ? parseInt(durMatch[1]) : 5;
-  const preferences = [];
-  if (/亲子|孩子|游乐/.test(t)) preferences.push('亲子');
-  if (/citywalk|散步|逛逛/.test(t)) preferences.push('citywalk');
-  if (/展览|博物馆|美术馆/.test(t)) preferences.push('展览');
-  if (/购物|逛街/.test(t)) preferences.push('购物');
-  if (/自然|公园|爬山/.test(t)) preferences.push('户外');
-  const special_needs = [];
-  if (/减肥|健康|轻食|低卡/.test(t)) special_needs.push('健康饮食');
-  if (/素食|不吃肉/.test(t)) special_needs.push('素食');
-  if (/轮椅|无障碍/.test(t)) special_needs.push('无障碍');
-  return { group_type, adults, children, radius_km, start_time, duration_hours, preferences, special_needs, budget_per_person: null, missing_fields: [] };
+
+  // 全部 AI 失败 → 规则降级，仍返回可用结果
+  console.warn('[plan_itinerary] 全部 AI 失败，规则降级');
+  var fallback = ruleFallbackPlan(intent, activities, restaurants);
+  return { ok: false, error: (lastError && lastError.message) || '未知错误', plan: fallback, source: 'rule' };
 }
 
-function parseIntentJSON(raw) {
-  if (!raw) throw new Error('空响应');
-  let cleaned = raw.replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/```\s*$/i,'').trim();
-  const start = cleaned.indexOf('{'), end = cleaned.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error('无JSON对象');
+// ── 统一 AI 调用（支持 GLM 流式 + 普通） ─────────────────────
+async function callAI(url, model, apiKey, systemPrompt, context, onStream) {
+  var useStream = typeof onStream === 'function';
+  var res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + apiKey
+    },
+    body: JSON.stringify({
+      model: model,
+      max_tokens: 800,
+      temperature: 0.4,
+      stream: useStream,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: '请根据以下数据编排行程：\n' + context }
+      ]
+    }),
+    signal: AbortSignal.timeout(15000)
+  });
+
+  if (!res.ok) {
+    var body = await res.text();
+    throw new Error(url.includes('bigmodel') ? 'GLM' : url.includes('deepseek') ? 'DeepSeek' : 'LongCat' +
+      ' HTTP ' + res.status + ': ' + body.slice(0, 120));
+  }
+
+  if (useStream) return await readStream(res, onStream);
+
+  var data = await res.json();
+  return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+}
+
+// ── SSE 流式读取 ──────────────────────────────────────────────
+async function readStream(res, onStream) {
+  var reader  = res.body.getReader();
+  var decoder = new TextDecoder('utf-8');
+  var full    = '';
+
+  while (true) {
+    var result = await reader.read();
+    if (result.done) break;
+    var chunk = decoder.decode(result.value, { stream: true });
+    var lines = chunk.split('\n');
+    for (var j = 0; j < lines.length; j++) {
+      var line = lines[j];
+      if (!line.startsWith('data: ')) continue;
+      var data = line.slice(6).trim();
+      if (data === '[DONE]') break;
+      try {
+        var obj   = JSON.parse(data);
+        var piece = (obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content) || '';
+        if (piece) { full += piece; onStream(piece); }
+      } catch (_) {}
+    }
+  }
+  return full;
+}
+
+// ── JSON 解析（健壮版） ────────────────────────────────────────
+function parsePlanJSON(raw) {
+  if (!raw || typeof raw !== 'string') throw new Error('空响应');
+  var cleaned = raw
+    .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  var start = cleaned.indexOf('{');
+  var end   = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('响应中无 JSON 对象');
   cleaned = cleaned.slice(start, end + 1);
-  const obj = JSON.parse(cleaned);
-  if (typeof obj.adults !== 'number') obj.adults = parseInt(obj.adults) || 2;
-  if (!Array.isArray(obj.children)) obj.children = [];
-  if (!Array.isArray(obj.preferences)) obj.preferences = [];
-  if (!Array.isArray(obj.special_needs)) obj.special_needs = [];
-  if (!Array.isArray(obj.missing_fields)) obj.missing_fields = [];
+  var obj = JSON.parse(cleaned);
+  if (!Array.isArray(obj.stops) || obj.stops.length === 0) throw new Error('stops 字段缺失');
   return obj;
 }
 
-function validateIntent(intent) {
-  const missing = REQUIRED_FIELDS.filter(f => !intent[f]);
-  const allMissing = [...new Set([...missing, ...(intent.missing_fields || [])])];
-  return allMissing.length > 0 ? { ok: false, missingFields: allMissing } : { ok: true };
+// ── 校验 AI 选的 id 是否在候选池里 ───────────────────────────
+function validatePlan(plan, activities, restaurants) {
+  var actIds = {};
+  var rstIds = {};
+  activities.forEach(function(a) { actIds[a.id] = true; });
+  restaurants.forEach(function(r) { rstIds[r.id] = true; });
+
+  plan.stops.forEach(function(stop) {
+    if (stop.category === 'activity'   && !actIds[stop.id])
+      throw new Error('无效活动 id: ' + stop.id);
+    if (stop.category === 'restaurant' && !rstIds[stop.id])
+      throw new Error('无效餐厅 id: ' + stop.id);
+    if (stop.arrival_time && !/^\d{2}:\d{2}$/.test(stop.arrival_time))
+      throw new Error('arrival_time 格式错误: ' + stop.arrival_time);
+  });
 }
 
-function applyDefaults(intent) {
+// ── 数据增强（把精简 stop 合并回完整字段） ─────────────────────
+function enrichPlan(plan, activities, restaurants) {
+  var actMap = {};
+  var rstMap = {};
+  activities.forEach(function(a)  { actMap[a.id] = a; });
+  restaurants.forEach(function(r) { rstMap[r.id] = r; });
+
+  var enrichedStops = plan.stops.map(function(stop) {
+    var base = stop.category === 'activity' ? actMap[stop.id] : rstMap[stop.id];
+    if (!base) return stop;
+    var merged = Object.assign({}, base, {
+      order:        stop.order,
+      arrival_time: stop.arrival_time,
+      end_time:     stop.end_time || '',
+      time_range:   (stop.arrival_time || '') + ' - ' + (stop.end_time || ''),
+      reason:       stop.reason || ''
+    });
+    return merged;
+  });
+
   return {
-    group_type:        intent.group_type        ?? 'friends',
-    adults:            intent.adults            ?? 2,
-    children:          intent.children          ?? [],
-    radius_km:         intent.radius_km         ?? 5,
-    start_time:        intent.start_time        ?? '14:00',
-    duration_hours:    intent.duration_hours    ?? 5,
-    preferences:       intent.preferences       ?? [],
-    special_needs:     intent.special_needs     ?? [],
-    budget_per_person: intent.budget_per_person ?? null,
-    missing_fields:    []
+    stops:               enrichedStops,
+    summary:             plan.summary             || '精心为您安排的出行方案',
+    total_cost_estimate: plan.total_cost_estimate || 0,
+    duration_hours:      plan.duration_hours      || 5,
+    tips:                Array.isArray(plan.tips) ? plan.tips : []
   };
 }
 
-async function extractIntent(userText, options = {}) {
-  const { glmApiKey, deepseekApiKey, round = 0 } = options;
-  let raw = null, usedFallback = false;
-  try { raw = await callGLM(userText, glmApiKey); }
-  catch (e) {
-    try { raw = await callDeepSeek(userText, deepseekApiKey); }
-    catch (_) { usedFallback = true; }
+// ── 规则降级 ──────────────────────────────────────────────────
+function ruleFallbackPlan(intent, activities, restaurants) {
+  var act1 = activities[0];
+  var rst  = restaurants[0];
+  var act2 = activities[1] || activities[0];
+
+  if (!act1 || !rst) {
+    return { stops: [], summary: '候选数据不足，请重试', total_cost_estimate: 0, tips: [], duration_hours: 5 };
   }
-  let intent;
-  try {
-    intent = raw ? parseIntentJSON(raw) : ruleBasedFallback(userText);
-    if (!raw) usedFallback = true;
-  } catch (_) { intent = ruleBasedFallback(userText); usedFallback = true; }
-  const validation = validateIntent(intent);
-  if (!validation.ok) {
-    if (usedFallback || round >= MAX_CLARIFY_ROUNDS)
-      return { ok: true, intent: applyDefaults(intent), source: usedFallback ? 'fallback' : 'default_filled' };
-    const mf = validation.missingFields;
-    const clarify = mf.length === 1 && CLARIFY_QUESTIONS[mf[0]]
-      ? CLARIFY_QUESTIONS[mf[0]]
-      : '请问能再告诉我一下出行人数和是家庭还是朋友出行吗？';
-    return { ok: false, clarify, intent, round };
+
+  var parts = (intent.start_time || '14:00').split(':');
+  var cursor = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+
+  function pad(total) {
+    return String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' +
+           String(total % 60).padStart(2, '0');
   }
-  return { ok: true, intent: applyDefaults(intent), source: usedFallback ? 'fallback' : 'ai' };
+
+  var s1Start = pad(cursor);
+  cursor += (act1.duration_min || 90);
+  var s1End = pad(cursor);
+  cursor += 15;
+  var s2Start = pad(cursor);
+  cursor += 90;
+  var s2End = pad(cursor);
+  cursor += 15;
+  var s3Start = pad(cursor);
+  cursor += (act2.duration_min || 60);
+  var s3End = pad(cursor);
+
+  var stops = [
+    Object.assign({}, act1, { order: 1, arrival_time: s1Start, end_time: s1End, time_range: s1Start + ' - ' + s1End, reason: '综合评分最高' }),
+    Object.assign({}, rst,  { order: 2, arrival_time: s2Start, end_time: s2End, time_range: s2Start + ' - ' + s2End, reason: '等位时间最短' }),
+    Object.assign({}, act2, { order: 3, arrival_time: s3Start, end_time: s3End, time_range: s3Start + ' - ' + s3End, reason: '饭后休闲好去处' })
+  ];
+
+  var costEst = ((rst.price_per_person || 80) + (act1.ticket_price || 0)) * (intent.adults || 2);
+
+  return {
+    stops: stops,
+    summary: intent.start_time + '出发，先去' + act1.name + '，再去' + rst.name + '用餐，最后' + act2.name + '。',
+    total_cost_estimate: costEst,
+    tips: ['建议提前查看营业时间', '出发前确认餐厅是否需要预约'],
+    duration_hours: intent.duration_hours || 5
+  };
 }
 
+
+// ── 单个动作执行 ──────────────────────────────────────────────
+async function runAction(action, mockMode) {
+  var t0 = Date.now();
+
+  // Mock 模式：模拟延迟 + 随机失败率（5%）
+  await delay_ms_fn(action.delay_ms);
+
+  var failed = mockMode && Math.random() < 0.05; // 5% 失败率
+
+  if (failed) {
+    return {
+      id:          action.id,
+      type:        action.type,
+      icon:        action.icon,
+      label:       action.label,
+      detail:      action.detail,
+      status:      'failed',
+      error:       '网络超时，请稍后手动确认',
+      duration_ms: Date.now() - t0
+    };
+  }
+
+  // Mock 成功：根据动作类型生成不同的成功详情
+  var successDetail = buildSuccessDetail(action);
+
+  return {
+    id:          action.id,
+    type:        action.type,
+    icon:        action.icon,
+    label:       action.label,
+    detail:      successDetail,
+    status:      'ok',
+    duration_ms: Date.now() - t0
+  };
+}
+
+// ── 成功详情文案 ──────────────────────────────────────────────
+function buildSuccessDetail(action) {
+  switch (action.type) {
+    case ACTION_TYPES.RESERVE_RESTAURANT:
+      return '预约成功 ✓ 订单号 MT' + Math.random().toString(36).slice(2,8).toUpperCase();
+    case ACTION_TYPES.BUY_TICKET:
+      return '购票成功 ✓ 电子票已发至手机，凭码入场';
+    case ACTION_TYPES.CHECK_AVAILABILITY:
+      var wait = Math.floor(Math.random() * 20);
+      return wait === 0 ? '当前无需等候，随时可入场 ✓' : '当前等候约 ' + wait + ' 分钟';
+    case ACTION_TYPES.ORDER_EXTRAS:
+      return '备注已提交 ✓ 餐厅已确认收到';
+    case ACTION_TYPES.SEND_PLAN:
+      return '已发送给同行者 ✓ 他们将收到出行提醒';
+    default:
+      return '操作成功 ✓';
+  }
+}
+
+// ── 执行摘要文案 ──────────────────────────────────────────────
+function buildExecutionSummary(results, planItems, intent) {
+  var okCount   = results.filter(function(r) { return r.status === 'ok'; }).length;
+  var failCount = results.filter(function(r) { return r.status === 'failed'; }).length;
+
+  var firstStop = planItems[0];
+  var startTime = firstStop ? firstStop.arrival_time : '14:00';
+
+  var groupMap  = { family: '家人', friends: '朋友们', couple: '另一半', senior: '长辈' };
+  var groupWord = (intent && groupMap[intent.group_type]) || '大家';
+
+  if (failCount === 0) {
+    return '🎉 全部搞定！' + okCount + '项预约均已完成。' +
+           startTime + ' 和' + groupWord + '出发，祝玩得开心！';
+  }
+  return '⚠️ ' + okCount + '项成功，' + failCount + '项需手动确认。' +
+         '行程不受影响，' + startTime + ' 准时出发！';
+}
+
+// ── 工具 ──────────────────────────────────────────────────────
+function delay_ms_fn(ms) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+// ── 导出（双环境兼容）────────────────────────────────────────
+
+
+// ══════════════════════════════════════════════════════════════
+// Tool 5: execute_booking
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Tool 5: execute_booking
+ * ─────────────────────────────────────────────────────────────
+ * 职责：按行程逐项执行预约/购票/配送动作，
+ *       通过 onProgress 回调实时推送每步进度给 UI。
+ *
+ * 调用：
+ *   const result = await executeBooking(planItems, intent, { onProgress });
+ *
+ * 返回：
+ *   { ok: true,  actions: ActionResult[], summary: string }
+ *   { ok: false, actions: ActionResult[], summary: string, errors: string[] }
+ *
+ * ActionResult：
+ *   { id, label, icon, status: 'ok'|'pending'|'failed', detail, duration_ms }
+ * ─────────────────────────────────────────────────────────────
+ */
+
+'use strict';
+
+// ── 动作类型定义 ──────────────────────────────────────────────
+var ACTION_TYPES = {
+  RESERVE_RESTAURANT: 'reserve_restaurant',
+  BUY_TICKET:         'buy_ticket',
+  CHECK_AVAILABILITY: 'check_availability',
+  ORDER_EXTRAS:       'order_extras',
+  SEND_PLAN:          'send_plan'
+};
+
+// ── 动作模板库（按 category + 场景生成动作列表）──────────────
+function buildActions(planItems, intent) {
+  var actions = [];
+  var idCounter = 1;
+
+  function makeId() { return 'act_' + (idCounter++); }
+
+  planItems.forEach(function(item) {
+    if (item.category === 'restaurant') {
+      // ① 餐厅预约（有 reservable 则先预约，否则叫号）
+      if (item.reservable) {
+        actions.push({
+          id:       makeId(),
+          type:     ACTION_TYPES.RESERVE_RESTAURANT,
+          icon:     '🍽️',
+          label:    item.name + ' — ' + intent.adults + '人位预约',
+          detail:   '预约 ' + (item.arrival_time || '') + ' 到店，' + intent.adults + ' 位，靠窗优先',
+          place_id: item.id,
+          delay_ms: 600,
+          retry:    1
+        });
+      } else {
+        actions.push({
+          id:       makeId(),
+          type:     ACTION_TYPES.CHECK_AVAILABILITY,
+          icon:     '🔢',
+          label:    item.name + ' — 查询当前等位',
+          detail:   '实时查询等候桌数和预计等位时长',
+          place_id: item.id,
+          delay_ms: 300,
+          retry:    0
+        });
+      }
+    }
+
+    if (item.category === 'activity') {
+      if (item.ticket_price > 0) {
+        // ② 购票（收费景点）
+        actions.push({
+          id:       makeId(),
+          type:     ACTION_TYPES.BUY_TICKET,
+          icon:     '🎫',
+          label:    item.name + ' — 门票 ¥' + item.ticket_price + '/张 × ' + (intent.adults + (intent.children ? intent.children.length : 0)),
+          detail:   '成人票 ¥' + item.ticket_price + '/张，电子票即时出票',
+          place_id: item.id,
+          delay_ms: 500,
+          retry:    1
+        });
+      } else {
+        // ③ 免费景点，仅确认开放状态
+        actions.push({
+          id:       makeId(),
+          type:     ACTION_TYPES.CHECK_AVAILABILITY,
+          icon:     '✅',
+          label:    item.name + ' — 确认今日开放',
+          detail:   '免费入场，确认当日开放时间及人流情况',
+          place_id: item.id,
+          delay_ms: 200,
+          retry:    0
+        });
+      }
+    }
+  });
+
+  // ④ 特殊需求：健康饮食 → 询问轻食/低卡推荐
+  if (intent.special_needs && intent.special_needs.includes('健康饮食')) {
+    var rstItem = planItems.find(function(p) { return p.category === 'restaurant'; });
+    if (rstItem) {
+      actions.push({
+        id:       makeId(),
+        type:     ACTION_TYPES.ORDER_EXTRAS,
+        icon:     '🥗',
+        label:    rstItem.name + ' — 备注健康饮食需求',
+        detail:   '向餐厅备注：少油少盐，优先推荐轻食菜品',
+        place_id: rstItem.id,
+        delay_ms: 300,
+        retry:    0
+      });
+    }
+  }
+
+  // ⑤ 有孩子 → 询问儿童椅/儿童餐
+  if (intent.children && intent.children.length > 0) {
+    var rstItem2 = planItems.find(function(p) { return p.category === 'restaurant'; });
+    if (rstItem2 && rstItem2.kid_menu) {
+      actions.push({
+        id:       makeId(),
+        type:     ACTION_TYPES.ORDER_EXTRAS,
+        icon:     '👶',
+        label:    rstItem2.name + ' — 预订儿童椅 × ' + intent.children.length,
+        detail:   '为 ' + intent.children.length + ' 位小朋友预留儿童椅和儿童餐具',
+        place_id: rstItem2.id,
+        delay_ms: 250,
+        retry:    0
+      });
+    }
+  }
+
+  // ⑥ 最后一步：发送行程给同行者
+  actions.push({
+    id:       makeId(),
+    type:     ACTION_TYPES.SEND_PLAN,
+    icon:     '📱',
+    label:    '行程计划 — 发送给同行者',
+    detail:   '生成出行摘要，一键发送给同行的家人/朋友',
+    place_id: null,
+    delay_ms: 400,
+    retry:    0
+  });
+
+  return actions;
+}
+
+// ── 主函数 ────────────────────────────────────────────────────
+async function executeBooking(planItems, intent, options) {
+  options = options || {};
+  var onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+  var mockMode   = options.mockMode !== false; // 默认 mock
+
+  var actions    = buildActions(planItems, intent);
+  var results    = [];
+  var hasFailure = false;
+
+  for (var i = 0; i < actions.length; i++) {
+    var action = actions[i];
+
+    // 推送"执行中"状态
+    if (onProgress) {
+      onProgress({
+        action:  action,
+        status:  'running',
+        index:   i,
+        total:   actions.length
+      });
+    }
+
+    var result = await runAction(action, mockMode);
+
+    // 失败时最多重试一次
+    if (result.status === 'failed' && action.retry > 0) {
+      await delay_ms_fn(300);
+      result = await runAction(action, mockMode);
+      result.retried = true;
+    }
+
+    results.push(result);
+    if (result.status === 'failed') hasFailure = true;
+
+    // 推送最终状态
+    if (onProgress) {
+      onProgress({
+        action:  action,
+        result:  result,
+        status:  result.status,
+        index:   i,
+        total:   actions.length
+      });
+    }
+
+    // 每步之间短暂停顿，让用户看清进度
+    if (i < actions.length - 1) await delay_ms_fn(120);
+  }
+
+  var summary = buildExecutionSummary(results, planItems, intent);
+
+  return {
+    ok:      !hasFailure,
+    actions: results,
+    summary: summary,
+    errors:  results.filter(function(r) { return r.status === 'failed'; })
+                    .map(function(r) { return r.label + '：' + r.error; })
+  };
+}
+
+// ── 单个动作执行 ──────────────────────────────────────────────
+async function runAction(action, mockMode) {
+  var t0 = Date.now();
+
+  // Mock 模式：模拟延迟 + 随机失败率（5%）
+  await delay_ms_fn(action.delay_ms);
+
+  var failed = mockMode && Math.random() < 0.05; // 5% 失败率
+
+  if (failed) {
+    return {
+      id:          action.id,
+      type:        action.type,
+      icon:        action.icon,
+      label:       action.label,
+      detail:      action.detail,
+      status:      'failed',
+      error:       '网络超时，请稍后手动确认',
+      duration_ms: Date.now() - t0
+    };
+  }
+
+  // Mock 成功：根据动作类型生成不同的成功详情
+  var successDetail = buildSuccessDetail(action);
+
+  return {
+    id:          action.id,
+    type:        action.type,
+    icon:        action.icon,
+    label:       action.label,
+    detail:      successDetail,
+    status:      'ok',
+    duration_ms: Date.now() - t0
+  };
+}
+
+// ── 成功详情文案 ──────────────────────────────────────────────
+function buildSuccessDetail(action) {
+  switch (action.type) {
+    case ACTION_TYPES.RESERVE_RESTAURANT:
+      return '预约成功 ✓ 订单号 MT' + Math.random().toString(36).slice(2,8).toUpperCase();
+    case ACTION_TYPES.BUY_TICKET:
+      return '购票成功 ✓ 电子票已发至手机，凭码入场';
+    case ACTION_TYPES.CHECK_AVAILABILITY:
+      var wait = Math.floor(Math.random() * 20);
+      return wait === 0 ? '当前无需等候，随时可入场 ✓' : '当前等候约 ' + wait + ' 分钟';
+    case ACTION_TYPES.ORDER_EXTRAS:
+      return '备注已提交 ✓ 餐厅已确认收到';
+    case ACTION_TYPES.SEND_PLAN:
+      return '已发送给同行者 ✓ 他们将收到出行提醒';
+    default:
+      return '操作成功 ✓';
+  }
+}
+
+// ── 执行摘要文案 ──────────────────────────────────────────────
+function buildExecutionSummary(results, planItems, intent) {
+  var okCount   = results.filter(function(r) { return r.status === 'ok'; }).length;
+  var failCount = results.filter(function(r) { return r.status === 'failed'; }).length;
+
+  var firstStop = planItems[0];
+  var startTime = firstStop ? firstStop.arrival_time : '14:00';
+
+  var groupMap  = { family: '家人', friends: '朋友们', couple: '另一半', senior: '长辈' };
+  var groupWord = (intent && groupMap[intent.group_type]) || '大家';
+
+  if (failCount === 0) {
+    return '🎉 全部搞定！' + okCount + '项预约均已完成。' +
+           startTime + ' 和' + groupWord + '出发，祝玩得开心！';
+  }
+  return '⚠️ ' + okCount + '项成功，' + failCount + '项需手动确认。' +
+         '行程不受影响，' + startTime + ' 准时出发！';
+}
+
+// ── 工具 ──────────────────────────────────────────────────────
+function delay_ms_fn(ms) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+// ── 导出（双环境兼容）────────────────────────────────────────
+
+
+// ══════════════════════════════════════════════════════════════
+// Tool 6: share_plan
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Tool 6: share_plan
+ * ─────────────────────────────────────────────────────────────
+ * 职责：把已执行的行程生成多种格式的分享文案
+ *
+ * 调用：
+ *   const share = sharePlan(planItems, intent, bookingResult);
+ *
+ * 返回：
+ *   {
+ *     wechat:  string,   // 微信分享格式（带 emoji，换行清晰）
+ *     plain:   string,   // TTS 朗读格式（无 emoji，适合语音播报）
+ *     compact: string,   // 单行紧凑格式（适合短消息/短链接）
+ *     title:   string    // 标题行
+ *   }
+ * ─────────────────────────────────────────────────────────────
+ */
+
+'use strict';
+
+function sharePlan(planItems, intent, bookingResult) {
+  var groupMap  = { family: '家人', friends: '朋友们', couple: '另一半', senior: '长辈' };
+  var groupWord = (intent && groupMap[intent.group_type]) || '大家';
+  var adults    = (intent && intent.adults) || 2;
+  var children  = (intent && intent.children && intent.children.length) || 0;
+  var headcount = adults + children;
+
+  // 计算行程时间跨度
+  var firstStop = planItems[0];
+  var lastStop  = planItems[planItems.length - 1];
+  var startTime = firstStop ? firstStop.arrival_time : '14:00';
+  var endTime   = lastStop
+    ? calcEndTime(lastStop.arrival_time, lastStop.duration_min || 60)
+    : '20:00';
+
+  // 费用估算（来自 bookingResult 或累加）
+  var costNote = '';
+  if (bookingResult && bookingResult.actions) {
+    // 从行程本身算：餐厅 price × 人数 + 门票
+    var totalCost = planItems.reduce(function(sum, item) {
+      if (item.category === 'restaurant') return sum + (item.price_per_person || 0) * adults;
+      if (item.category === 'activity')   return sum + (item.ticket_price || 0) * headcount;
+      return sum;
+    }, 0);
+    if (totalCost > 0) costNote = '💰 人均约 ¥' + Math.round(totalCost / headcount);
+  }
+
+  // ── 微信格式 ────────────────────────────────────────────────
+  var wechatLines = [
+    '📍 今日出行计划 | ' + headcount + '人 | ' + startTime + '-' + endTime,
+    ''
+  ];
+  planItems.forEach(function(item, i) {
+    var stepIcon = item.category === 'restaurant' ? '🍽️' : (i === 0 ? '🎯' : '🎪');
+    var stepLine = stepIcon + ' ' + item.arrival_time + '  ' + item.name;
+    if (item.category === 'restaurant' && item.wait_text && item.wait_text !== '无需等位') {
+      stepLine += '（' + item.wait_text + '）';
+    }
+    if (item.category === 'activity' && item.ticket_price === 0) {
+      stepLine += '（免费）';
+    }
+    wechatLines.push(stepLine);
+    if (item.desc) {
+      // 截取描述前 20 字
+      var shortDesc = item.desc.length > 20 ? item.desc.slice(0, 20) + '…' : item.desc;
+      wechatLines.push('   ' + shortDesc);
+    }
+    wechatLines.push('');
+  });
+
+  if (costNote) wechatLines.push(costNote);
+  wechatLines.push('✨ 美团出行规划 · 祝玩得开心！');
+
+  // ── TTS 朗读格式 ──────────────────────────────────────────
+  var plainParts = [
+    '行程安排好了，' + headcount + '人出行，' + startTime + '出发。'
+  ];
+  planItems.forEach(function(item, i) {
+    var order = ['第一站', '第二站', '第三站', '第四站'][i] || ('第' + (i + 1) + '站');
+    plainParts.push(order + '是' + item.name + '，' + item.arrival_time + '到达，');
+    if (item.category === 'restaurant') {
+      plainParts.push('在这里' + (item.duration_min ? Math.round(item.duration_min / 60 * 10) / 10 : 1) + '小时用餐。');
+    } else {
+      plainParts.push('游览约' + (item.duration_min ? Math.round(item.duration_min / 60 * 10) / 10 : 1) + '小时。');
+    }
+  });
+  plainParts.push('预计' + endTime + '结束，祝' + groupWord + '玩得开心！');
+
+  // ── 紧凑单行格式 ───────────────────────────────────────────
+  var stops = planItems.map(function(item) {
+    return item.arrival_time + ' ' + item.name;
+  }).join(' → ');
+  var compact = '今日行程：' + stops + '（' + headcount + '人）';
+
+  // ── 标题 ──────────────────────────────────────────────────
+  var dateStr = getTodayStr();
+  var title   = dateStr + ' 和' + groupWord + '的行程';
+
+  return {
+    wechat:  wechatLines.join('\n'),
+    plain:   plainParts.join(''),
+    compact: compact,
+    title:   title
+  };
+}
+
+// ── 工具函数 ─────────────────────────────────────────────────
+function calcEndTime(arrivalTime, durationMin) {
+  var parts = (arrivalTime || '14:00').split(':');
+  var totalMin = parseInt(parts[0], 10) * 60 + parseInt(parts[1] || '0', 10) + durationMin;
+  var h = Math.floor(totalMin / 60) % 24;
+  var m = totalMin % 60;
+  return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+}
+
+function getTodayStr() {
+  var now = new Date();
+  var month = now.getMonth() + 1;
+  var day   = now.getDate();
+  var weeks = ['日','一','二','三','四','五','六'];
+  return month + '月' + day + '日（周' + weeks[now.getDay()] + '）';
+}
+
+// ── 导出 ──────────────────────────────────────────────────────
+
+
 // ── API Key 配置（在此填入真实 Key） ──────────────────────────
-const API_CONFIG = {
-  glmApiKey:      '',   // 填入智谱 GLM API Key
-  deepseekApiKey: ''    // 填入 DeepSeek API Key（备用）
+// ── API Keys（在此填入，或通过 env-loader.js + config.js 注入）──
+const API_CONFIG = (window.APP_CONFIG) ? {
+  glmApiKey:      window.APP_CONFIG.ZHIPU_API_KEY      || '',
+  deepseekApiKey: window.APP_CONFIG.DEEPSEEK_API_KEY   || '',
+  longcatApiKey:  window.APP_CONFIG.LONGCAT_API_KEY    || ''
+} : {
+  glmApiKey:      '',   // 或直接填入：'your_zhipu_key'
+  deepseekApiKey: '',   // 或直接填入：'your_deepseek_key'
+  longcatApiKey:  ''    // 或直接填入：'your_longcat_key'
 };
 
 // ── STATE ──
@@ -1528,6 +2143,7 @@ let currentPlan = null;
 let lastPlanText = '';
 let clarifyRound = 0;
 let lastUserText = '';
+let lastShareData = null;   // Tool 6 最新分享数据
 
 // ── CLOCK ──
 function updateClock() {
@@ -1681,30 +2297,64 @@ async function sendMessage() {
   ]);
   removeTyping();
 
-  // 合并候选池，取最优活动×2 + 最优餐厅×1
-  const topActivities = actResult.activities.slice(0, 2);
-  const topRestaurant = rstResult.restaurants[0];
-
-  if (!topRestaurant) {
-    addMessage('ai', '暂时找不到合适的餐厅，要不要换个方向试试？');
+  // ── Tool 4: plan_itinerary（AI 编排行程）─────────────────
+  if (actResult.activities.length === 0 || rstResult.restaurants.length === 0) {
+    addMessage('ai', '附近暂时找不到合适的活动或餐厅，要不要放宽一下距离范围试试？');
     document.getElementById('send-btn').disabled = false;
     return;
   }
 
-  // 组合三段行程数据
-  const planItems = [
-    topActivities[0],
-    topRestaurant,
-    topActivities[1] || topActivities[0]
-  ].filter(Boolean);
+  // 流式占位：在 AI 思考时显示打字动画，结果出来后逐字替换
+  showTyping();
+  let streamingText = '';
+  const streamEl = createStreamBubble();
 
-  showPlanCards(planItems);
+  const planResult = await planItinerary(
+    intent,
+    actResult.activities,
+    rstResult.restaurants,
+    {
+      ZHIPU_API_KEY:      API_CONFIG.glmApiKey,
+      DEEPSEEK_API_KEY:   API_CONFIG.deepseekApiKey,
+      LONGCAT_API_KEY:    API_CONFIG.longcatApiKey,
+      PRIMARY_AI_MODEL:   'zhipu',
+      AI_FALLBACK_ORDER:  ['zhipu', 'deepseek', 'longcat'],
+      DEBUG_MODE:         false,
+      onStream: function(chunk) {
+        streamingText += chunk;
+        if (streamEl) streamEl.textContent = streamingText;
+      }
+    }
+  );
+  removeTyping();
+  if (streamEl) streamEl.remove();   // 移除流式气泡
+
+  // AI 降级时给用户友好提示，但仍展示结果
+  if (!planResult.ok) {
+    const fallbackNote = planResult.error && planResult.error.includes('Key')
+      ? '（提示：填入 API Key 后 AI 将生成个性化方案）'
+      : '（AI 服务暂时繁忙，已用智能规则快速生成）';
+    addMessage('ai', '⚡ 为您快速生成行程方案 ' + fallbackNote);
+  } else if (planResult.plan && planResult.plan.summary) {
+    addMessage('ai', '✨ ' + planResult.plan.summary);
+  }
+
+  const plan      = planResult.plan;
+  const planItems = plan ? plan.stops : [];
+
+  if (!planItems || planItems.length === 0) {
+    addMessage('ai', '暂时无法生成行程，请稍后重试。');
+    document.getElementById('send-btn').disabled = false;
+    return;
+  }
+
+  showPlanCards(planItems, plan);
   updateTimelineFromPlan(planItems);
   lastPlanText = generateShareTextFromPlan(planItems, intent);
-  currentPlan = planItems;
+  currentPlan  = { items: planItems, plan: plan };
 }
 
-function showPlanCards(planItems) {
+function showPlanCards(planItems, plan) {
   const chatArea = document.getElementById('chat-area');
   const cardContainer = document.createElement('div');
   cardContainer.className = 'msg ai';
@@ -1729,61 +2379,70 @@ function showPlanCards(planItems) {
     card.setAttribute('role', 'article');
     card.setAttribute('aria-label', '第' + (i + 1) + '站：' + item.name);
 
-    const waitInfo = item.category === 'restaurant'
-      ? '<div class="info-item">🕐 ' + item.wait_text + '</div>'
-      : '';
-    const priceInfo = item.category === 'restaurant'
-      ? '<div class="info-item">💰 ' + item.price_text + '</div>'
-      : '<div class="info-item">🎫 ' + item.price_text + '</div>';
-
     const tagColors = ['blue', 'green', 'amber'];
-    const tagColor = tagColors[i] || 'blue';
+    const tagColor  = tagColors[i] || 'blue';
+
+    // 等位/状态（餐厅专属）
+    const waitInfo  = item.category === 'restaurant'
+      ? '<div class="info-item">🕐 ' + (item.wait_text || '查询中') + '</div>' : '';
+    const priceInfo = item.category === 'restaurant'
+      ? '<div class="info-item">💰 ' + (item.price_text || '') + '</div>'
+      : '<div class="info-item">🎫 ' + (item.price_text || '免费') + '</div>';
+
     const badgeHtml = item.badge
-      ? '<span style="margin-left:8px;font-size:0.8em;">' + item.badge + '</span>'
+      ? '<span style="margin-left:8px;font-size:0.8em;">' + item.badge + '</span>' : '';
+
+    const durText = item.duration_text
+      ? item.duration_text : (item.duration_min ? Math.round(item.duration_min / 60 * 10) / 10 + '小时' : '');
+
+    // Tips（AI 推荐理由，展示在卡片底部）
+    const tips = (item.tips && item.tips.length > 0)
+      ? '<div style="margin-top:8px;padding:8px 10px;background:var(--primary-bg);border-radius:6px;font-size:0.82em;color:var(--primary);">' +
+          '💡 ' + item.tips.join('　') + '</div>'
       : '';
-    const durationDisplay = item.duration_text
-      ? item.duration_text
-      : (item.duration_min ? item.duration_min + '分钟' : '');
 
     card.innerHTML =
       '<div class="card-header">' +
         '<div class="card-step step-' + (i + 1) + '" aria-label="第' + (i + 1) + '站">0' + (i + 1) + '</div>' +
         '<div style="flex:1">' +
-          '<div class="card-title">' + item.icon + ' ' + item.name + badgeHtml + '</div>' +
-          '<div class="card-meta">⏰ ' + item.time_range + '（约' + durationDisplay + '）</div>' +
+          '<div class="card-title">' + (item.icon || '📍') + ' ' + item.name + badgeHtml + '</div>' +
+          '<div class="card-meta">⏰ ' + (item.time_range || '') + '（约' + durText + '）</div>' +
         '</div>' +
       '</div>' +
       '<div class="card-body">' +
-        '<div class="card-desc">' + item.desc + '</div>' +
+        '<div class="card-desc">' + (item.desc || '') + '</div>' +
         '<div class="card-tags">' +
-          item.tags.map(function(t) {
+          (item.tags || []).map(function(t) {
             return '<span class="tag tag-' + tagColor + '">' + t + '</span>';
           }).join('') +
         '</div>' +
         '<div class="card-info-row">' +
-          '<div class="info-item">⭐ ' + item.rating + '</div>' +
-          '<div class="info-item">📍 ' + item.distance_text + '</div>' +
+          '<div class="info-item">⭐ ' + (item.rating || '-') + '</div>' +
+          '<div class="info-item">📍 ' + (item.distance_text || '') + '</div>' +
           waitInfo + priceInfo +
         '</div>' +
+        tips +
       '</div>';
 
     cards.appendChild(card);
   });
+
+  // 费用估算行（来自 AI plan）
+  if (plan && plan.cost_per_person) {
+    const costEl = document.createElement('div');
+    costEl.style.cssText = 'margin-top:10px;padding:10px 14px;background:var(--success-bg);border-radius:8px;font-size:0.88em;color:var(--success);font-weight:500;';
+    costEl.textContent = '💰 人均费用估算：约 ¥' + plan.cost_per_person + '（含门票+餐饮）';
+    cards.appendChild(costEl);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'action-bar';
   actions.setAttribute('role', 'group');
   actions.setAttribute('aria-label', '方案操作');
   actions.innerHTML =
-    '<button class="action-btn btn-confirm" onclick="confirmPlan()" aria-label="确认方案并一键预约执行">' +
-      '✅ 确认方案 · 一键执行' +
-    '</button>' +
-    '<button class="action-btn btn-modify" onclick="modifyPlan()" aria-label="修改行程方案">' +
-      '✏️ 修改' +
-    '</button>' +
-    '<button class="action-btn btn-share" onclick="showShareModal()" aria-label="分享行程给家人朋友">' +
-      '📤 分享' +
-    '</button>';
+    '<button class="action-btn btn-confirm" onclick="confirmPlan()" aria-label="确认方案并一键预约执行">✅ 确认方案 · 一键执行</button>' +
+    '<button class="action-btn btn-modify" onclick="modifyPlan()" aria-label="修改行程方案">✏️ 修改</button>' +
+    '<button class="action-btn btn-share" onclick="showShareModal()" aria-label="分享行程给家人朋友">📤 分享</button>';
 
   actions.querySelector('.btn-confirm').addEventListener('click', addRipple);
 
@@ -1795,37 +2454,34 @@ function showPlanCards(planItems) {
   chatArea.scrollTop = chatArea.scrollHeight;
   document.getElementById('send-btn').disabled = false;
 
+  // TTS 朗读第一站
   var firstName = planItems[0] ? planItems[0].name : '';
   var firstTime = planItems[0] ? planItems[0].arrival_time : '';
   setTimeout(function() {
-    speakText('好的！我为您规划了' + planItems.length + '站行程，第一站是' + firstName + '，' + firstTime + '出发。');
+    speakText('好的！为您规划了' + planItems.length + '站行程，第一站是' + firstName + '，' + firstTime + '出发。');
   }, 500);
 }
 
-function updateTimelineFromPlan(planItems) {
-  const tl = document.getElementById('timeline');
-  tl.innerHTML = planItems.map(function(item, i) {
-    const dotClass = i === 0 ? 'active' : 'upcoming';
-    const dotLabel = i === 0 ? '下一站' : '计划中';
-    const subText = item.category === 'restaurant' ? item.cuisine : item.type;
-    const durText = item.duration_text || (item.duration_min ? item.duration_min + '分钟' : '');
-    return '<div class="tl-item">' +
-      '<div class="tl-dot ' + dotClass + '" aria-label="' + dotLabel + '"></div>' +
-      '<div class="tl-time">' + item.arrival_time + '</div>' +
-      '<div class="tl-name">' + item.icon + ' ' + item.name + '</div>' +
-      '<div class="tl-sub">' + subText + ' · ' + durText + '</div>' +
-      '</div>';
-  }).join('');
+// ── 流式气泡辅助 ─────────────────────────────────────────────
+function createStreamBubble() {
+  const chatArea = document.getElementById('chat-area');
+  if (!chatArea) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ai';
+  wrap.id = 'stream-bubble';
+  const av = document.createElement('div');
+  av.className = 'msg-avatar'; av.textContent = '🤖';
+  const bub = document.createElement('div');
+  bub.className = 'msg-bubble';
+  bub.style.fontStyle = 'italic';
+  bub.style.color = 'var(--text-3)';
+  bub.textContent = '';
+  wrap.appendChild(av); wrap.appendChild(bub);
+  chatArea.appendChild(wrap);
+  chatArea.scrollTop = chatArea.scrollHeight;
+  return bub;
 }
 
-function generateShareTextFromPlan(planItems, intent) {
-  const stops = planItems.map(function(p) {
-    return p.arrival_time + ' ' + p.name;
-  }).join('→');
-  const groupMap = { family: '家人', friends: '朋友们', couple: '另一半', senior: '长辈' };
-  const groupLabel = (intent && groupMap[intent.group_type]) ? groupMap[intent.group_type] : '大家';
-  return '搞定了！和' + groupLabel + '的行程：' + stops + '。玩得开心 🎉';
-}
 function addRipple(e) {
   const btn = e.currentTarget;
   const r = document.createElement('span');
@@ -1840,69 +2496,140 @@ function addRipple(e) {
   setTimeout(() => r.remove(), 600);
 }
 
+// ── Tool 5 + 6 UI 驱动层 ────────────────────────────────────
 async function confirmPlan() {
-  showTyping();
-  await delay(800);
-  removeTyping();
+  if (!currentPlan || !currentPlan.items || currentPlan.items.length === 0) {
+    addMessage('ai', '还没有行程方案，请先告诉我您想怎么玩～');
+    return;
+  }
 
-  const chatArea = document.getElementById('chat-area');
-  const msgDiv = document.createElement('div');
+  // 禁用按钮防重复点击
+  document.querySelectorAll('.btn-confirm').forEach(function(b) { b.disabled = true; });
+
+  // 构建执行进度 UI
+  var chatArea = document.getElementById('chat-area');
+  var msgDiv   = document.createElement('div');
   msgDiv.className = 'msg ai';
   msgDiv.setAttribute('role', 'article');
-  msgDiv.setAttribute('aria-label', '执行结果');
+  msgDiv.setAttribute('aria-label', '执行进度');
 
-  const avatar = document.createElement('div');
-  avatar.className = 'msg-avatar';
-  avatar.setAttribute('aria-hidden', 'true');
-  avatar.textContent = '🤖';
+  var av = document.createElement('div');
+  av.className = 'msg-avatar'; av.textContent = '🤖';
 
-  const bubble = document.createElement('div');
-  bubble.className = 'msg-bubble';
-  bubble.innerHTML = '<strong>🚀 正在为您执行以下操作…</strong>';
+  var bub = document.createElement('div');
+  bub.className = 'msg-bubble';
 
-  const execList = document.createElement('div');
+  var heading = document.createElement('strong');
+  heading.textContent = '🚀 正在为您执行预约…';
+  bub.appendChild(heading);
+
+  var execList = document.createElement('div');
   execList.className = 'exec-list';
   execList.setAttribute('role', 'list');
-  execList.setAttribute('aria-label', '执行进度列表');
+  bub.appendChild(execList);
 
-  MOCK_EXEC.forEach(item => {
-    const el = document.createElement('div');
-    el.className = 'exec-item';
-    el.setAttribute('role', 'listitem');
-    el.setAttribute('aria-label', `${item.name}：${item.label}`);
-    el.innerHTML = `
-      <span class="exec-icon" aria-hidden="true">${item.icon}</span>
-      <span class="exec-name">${item.name}</span>
-      <span class="exec-status status-${item.status}">${item.label}</span>
-    `;
-    execList.appendChild(el);
-  });
-
-  bubble.appendChild(execList);
-
-  const note = document.createElement('p');
-  note.style.cssText = 'margin-top:14px;font-size:0.88em;color:var(--text-3)';
-  note.textContent = '✅ 全部完成！行程计划已发送给家人，下午2点出发，玩得开心！';
-  bubble.appendChild(note);
-
-  msgDiv.appendChild(avatar);
-  msgDiv.appendChild(bubble);
+  msgDiv.appendChild(av);
+  msgDiv.appendChild(bub);
   chatArea.appendChild(msgDiv);
   chatArea.scrollTop = chatArea.scrollHeight;
 
-  setTimeout(() => speakText('好的！所有预约都已完成，行程计划已发送给家人，祝您玩得开心！'), 1500);
-}
+  // 存储每个动作对应的 DOM 元素（onProgress 里更新）
+  var actionEls = {};
 
-function modifyPlan() {
-  document.getElementById('main-input').value = '我想修改一下行程，餐厅能换一家排队少一点的吗？';
-  document.getElementById('main-input').focus();
-}
+  // ── Tool 5: executeBooking ─────────────────────────────────
+  var intent    = currentPlan.intent || {};
+  var planItems = currentPlan.items;
 
+  var bookingResult = await executeBooking(planItems, intent, {
+    mockMode: true,
+    onProgress: function(evt) {
+      var action = evt.action;
+
+      if (evt.status === 'running') {
+        // 首次出现：创建 DOM 行
+        var el = document.createElement('div');
+        el.className = 'exec-item';
+        el.setAttribute('role', 'listitem');
+        el.id = 'exec-' + action.id;
+        el.innerHTML =
+          '<span class="exec-icon" aria-hidden="true">' + action.icon + '</span>' +
+          '<span class="exec-name">'   + action.label + '</span>' +
+          '<span class="exec-status status-wait" id="st-' + action.id + '">执行中…</span>';
+        execList.appendChild(el);
+        chatArea.scrollTop = chatArea.scrollHeight;
+        actionEls[action.id] = el;
+
+      } else {
+        // 更新状态
+        var stEl = document.getElementById('st-' + action.id);
+        if (stEl) {
+          var isOk    = evt.status === 'ok';
+          var isFail  = evt.status === 'failed';
+          stEl.className = 'exec-status ' + (isOk ? 'status-ok' : isFail ? 'status-fail' : 'status-wait');
+          stEl.textContent = isOk ? '✅ 完成' : isFail ? '❌ 失败' : '⏳';
+          // 更新详情（tooltip式追加）
+          if (evt.result && evt.result.detail) {
+            var nameEl = el && el.querySelector('.exec-name');
+            if (nameEl) nameEl.title = evt.result.detail;
+          }
+        }
+        chatArea.scrollTop = chatArea.scrollHeight;
+      }
+    }
+  });
+
+  // ── Tool 6: sharePlan ──────────────────────────────────────
+  var share = sharePlan(planItems, intent, bookingResult);
+  lastPlanText = share.wechat;
+  lastShareData = share;
+
+  // 完成提示
+  var note = document.createElement('div');
+  note.style.cssText = 'margin-top:14px;padding:10px 12px;background:var(--success-bg);border-radius:8px;font-size:0.88em;color:var(--success);font-weight:500;';
+  note.textContent = bookingResult.summary;
+  bub.appendChild(note);
+  chatArea.scrollTop = chatArea.scrollHeight;
+
+  setTimeout(function() { speakText(bookingResult.summary); }, 600);
+}
 
 function generateShareText(scenario) {
-  return '行程规划完成，出发吧！🎉';
-  return `搞定了！${places[0].time}出发，先去${places[0].name}（${places[0].duration}），然后${places[1].time}去${places[1].name}，最后${places[2].time}顺路去${places[2].name}。玩的开心 🎉`;
+  return lastPlanText || '行程规划完成，出发吧！🎉';
 }
+
+// ── 分享弹窗（升级版）────────────────────────────────────────
+function showShareModal() {
+  var share = lastShareData || null;
+  if (share) {
+    document.getElementById('share-content').textContent = share.wechat;
+    var titleEl = document.getElementById('share-title');
+    if (titleEl) titleEl.textContent = '📤 ' + share.title;
+  } else {
+    document.getElementById('share-content').textContent =
+      lastPlanText || '先规划一个行程，再来分享吧 😊';
+  }
+  document.getElementById('share-modal').classList.add('open');
+  document.querySelector('.modal').focus();
+}
+
+function closeModal(e) {
+  if (e.target === e.currentTarget)
+    document.getElementById('share-modal').classList.remove('open');
+}
+
+function copyShareText() {
+  var text = document.getElementById('share-content').textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = document.querySelector('.modal-btn.primary');
+    btn.textContent = '✅ 已复制！';
+    setTimeout(function() { btn.textContent = '📋 复制文字'; }, 1800);
+  }).catch(function() { alert('请手动复制文字'); });
+}
+
+document.getElementById('share-modal').addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') document.getElementById('share-modal').classList.remove('open');
+});
+
 
 // ── MESSAGES ──
 function addMessage(role, text) {
@@ -1962,25 +2689,9 @@ function removeTyping() {
 }
 
 // ── SHARE ──
-function showShareModal() {
-  document.getElementById('share-content').textContent = lastPlanText || '先规划一个行程，再来分享吧 😊';
-  document.getElementById('share-modal').classList.add('open');
-  document.querySelector('.modal').focus();
-}
-function closeModal(e) {
-  if (e.target === e.currentTarget) document.getElementById('share-modal').classList.remove('open');
-}
-function copyShareText() {
-  const text = document.getElementById('share-content').textContent;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.querySelector('.modal-btn.primary');
-    btn.textContent = '✅ 已复制！';
-    setTimeout(() => btn.textContent = '📋 复制文字', 1800);
-  }).catch(() => alert('请手动复制文字'));
-}
-document.getElementById('share-modal').addEventListener('keydown', e => {
-  if (e.key === 'Escape') document.getElementById('share-modal').classList.remove('open');
-});
+
+
+
 
 // ── CLEAR ──
 function clearChat() {
