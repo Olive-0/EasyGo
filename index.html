@@ -522,6 +522,18 @@
     animation: ripple 0.5s linear; pointer-events: none;
   }
 </style>
+<!-- API Keys 全局配置 (直接硬编码方式 - 类似 travel_map_app.html) -->
+<script>
+  // 高德地图
+  window.AMAP_KEY = '88c4911767fc5204604a7a0c85cd13ba';
+  window.AMAP_SECURITY_JS_CODE = '3265dcffd5955de6a967df49e2d79ebb';
+  // AI 相关 API Keys
+  window.ZHIPU_API_KEY = '633e0081d910482bb6605c734912d56f.LodZew7Tw6NqDw9e';
+  window.DEEPSEEK_API_KEY = 'sk-d47a8e30b8bb43a692777f8d70e6b8c2';
+  window.LONGCAT_API_KEY = 'ak_2Kc7hj5KS5gQ97H26Z2Yu8Mr1Sh9W';
+  // 天气 API
+  window.WEATHER_API_KEY = 'SjCNqoRJjxzSQkw1R';
+</script>
 </head>
 <body>
 
@@ -542,6 +554,23 @@
       <button class="active" data-size-target="normal" onclick="setFontSize('normal',this)" title="标准字体" aria-pressed="true">A</button>
       <button data-size-target="large" onclick="setFontSize('large',this)" title="大字体" aria-pressed="false" style="font-size:18px;">A</button>
       <button data-size-target="xlarge" onclick="setFontSize('xlarge',this)" title="超大字体" aria-pressed="false" style="font-size:22px;">A</button>
+    </div>
+    <div class="nav-btn" id="locWidget" style="position:relative;" onclick="toggleLocDropdown(event)" aria-label="位置选择">
+      <span id="locDisplay">定位中…</span>
+      <div id="locDropdown" style="display:none;position:absolute;right:0;top:46px;background:var(--surface);border:1px solid var(--border);padding:10px;border-radius:10px;z-index:250;min-width:240px;">
+        <button class="nav-btn" style="width:100%;justify-content:center;margin-bottom:8px;" onclick="autoLocate();toggleLocDropdown()">📍 自动定位</button>
+        <div style="display:flex;gap:6px;margin-bottom:8px;">
+          <select id="selProvinceMini" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border)"></select>
+          <select id="selCityMini" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border)" disabled></select>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;">
+          <select id="selDistrictMini" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border)" disabled></select>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="nav-btn" style="flex:1;justify-content:center;" onclick="confirmLocationMini()">确认位置</button>
+          <button class="nav-btn" style="flex:1;justify-content:center;" onclick="toggleLocDropdown()">取消</button>
+        </div>
+      </div>
     </div>
     <button class="nav-btn" id="senior-btn" onclick="toggleSeniorMode()" aria-label="切换老年人模式">
       <span aria-hidden="true">👴</span> 老年人模式
@@ -625,16 +654,40 @@
 
     <div class="sidebar-section">
       <h3>地图预览</h3>
-      <div class="map-placeholder" role="img" aria-label="地图预览区域，将显示行程地点">
-        <div class="map-grid" aria-hidden="true"></div>
-        <div class="map-pin" aria-hidden="true">📍</div>
-        <span>行程地点将在此显示</span>
+      <div class="map-preview" id="mapPreview" style="height:180px;position:relative;border-radius:12px;overflow:hidden;border:1.5px solid var(--border);">
+        <div id="amap-preview" style="width:100%;height:100%;background:#EFF6FF;display:flex;align-items:center;justify-content:center;color:var(--primary);font-size:18px">加载中…</div>
+        <div id="previewRouteSummary" style="position:absolute;left:10px;top:10px;z-index:12;background:rgba(255,255,255,0.92);padding:8px;border-radius:8px;border:1px solid var(--border);display:none;max-width:60%;font-size:13px;color:var(--text-2)"></div>
+        <div style="position:absolute;right:10px;bottom:10px"><button class="nav-btn" onclick="openFullMap()">放大地图</button></div>
+      </div>
+
+      <!-- Full map modal -->
+      <div id="mapModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:500;align-items:center;justify-content:center;padding:24px;">
+        <div style="position:relative;width:100%;max-width:1100px;height:80%;background:var(--surface);border-radius:12px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+          <div style="position:absolute;right:12px;top:12px;z-index:20;"><button class="nav-btn" onclick="closeFullMap()">关闭</button></div>
+          <div id="amap-full" style="width:100%;height:100%"></div>
+          <div id="mapControls" style="position:absolute;left:12px;top:12px;z-index:20;display:flex;gap:8px;align-items:center;padding:6px;background:rgba(255,255,255,0.9);border-radius:8px;border:1px solid var(--border)">
+            <select id="routeModeSelect"><option value="smart">智能推薦</option><option value="driving">驾车</option><option value="transit">公交</option><option value="walking">步行</option></select>
+            <select id="routePolicySelect"><option value="LEAST_DISTANCE">路程最短</option><option value="LEAST_TIME">时间最短</option><option value="MOST_ECONOMICAL">最经济</option></select>
+            <button class="nav-btn" onclick="planRouteOnMap()">规划路线</button>
+          </div>
+          <div id="routeDetailsPanel" style="position:absolute;left:12px;bottom:12px;z-index:20;width:340px;max-height:68%;overflow:auto;padding:10px;background:rgba(255,255,255,0.96);border-radius:8px;border:1px solid var(--border);display:none;font-size:13px;color:var(--text-2)"></div>
+        </div>
       </div>
     </div>
 
     <div class="sidebar-section">
       <h3>出行参考</h3>
       <div style="display:flex;flex-direction:column;gap:8px;">
+        <div class="info-card" role="status" id="travel-suggestion-card">
+          <div class="info-card-icon" aria-hidden="true">🚇</div>
+          <div style="flex:1">
+            <div class="info-card-label">出行建议</div>
+            <div class="info-card-value" id="travel-suggestion-summary">地铁/公交优先</div>
+          </div>
+          <div style="margin-left:8px;display:flex;align-items:center">
+            <button class="nav-btn" id="travel-expand-btn" onclick="toggleTravelPanel()">展开</button>
+          </div>
+        </div>
         <div class="info-card" role="status">
           <div class="info-card-icon" aria-hidden="true">☀️</div>
           <div>
@@ -649,11 +702,27 @@
             <div class="info-card-value" id="current-time">--:--</div>
           </div>
         </div>
-        <div class="info-card" role="status">
-          <div class="info-card-icon" aria-hidden="true">🚇</div>
-          <div>
-            <div class="info-card-label">出行建议</div>
-            <div class="info-card-value">地铁/公交优先</div>
+        <div id="travel-panel" style="display:none;padding:8px 6px;">
+          <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+            <label style="font-size:12px;color:var(--text3);width:64px">交通方式</label>
+            <select id="travel-mode-select" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border)">
+              <option value="smart" selected>智能推薦（默认）</option>
+              <option value="transit">地铁/公交</option>
+              <option value="driving">驾车</option>
+              <option value="walking">步行</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+            <label style="font-size:12px;color:var(--text3);width:64px">排序</label>
+            <select id="travel-policy-select" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border)">
+              <option value="LEAST_DISTANCE">路程最短</option>
+              <option value="LEAST_TIME">时间最短</option>
+              <option value="MOST_ECONOMICAL">最经济</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="nav-btn" style="flex:1;justify-content:center" onclick="planRouteFromSuggestion()">在地图上规划路线</button>
+            <button class="nav-btn" style="flex:1;justify-content:center" onclick="collapseTravelPanel()">收起</button>
           </div>
         </div>
       </div>
@@ -2437,16 +2506,11 @@ function getTodayStr() {
 // ── 导出 ──────────────────────────────────────────────────────
 
 
-// ── API Key 配置（在此填入真实 Key） ──────────────────────────
-// ── API Keys（在此填入，或通过 env-loader.js + config.js 注入）──
-const API_CONFIG = (window.APP_CONFIG) ? {
-  glmApiKey:      window.APP_CONFIG.ZHIPU_API_KEY      || '',
-  deepseekApiKey: window.APP_CONFIG.DEEPSEEK_API_KEY   || '',
-  longcatApiKey:  window.APP_CONFIG.LONGCAT_API_KEY    || ''
-} : {
-  glmApiKey:      '',   // 或直接填入：'your_zhipu_key'
-  deepseekApiKey: '',   // 或直接填入：'your_deepseek_key'
-  longcatApiKey:  ''    // 或直接填入：'your_longcat_key'
+// ── API Key 配置（直接从全局变量读取） ──────────────────────────
+const API_CONFIG = {
+  glmApiKey:      window.ZHIPU_API_KEY      || '',
+  deepseekApiKey: window.DEEPSEEK_API_KEY   || '',
+  longcatApiKey:  window.LONGCAT_API_KEY    || ''
 };
 
 // ── STATE ──
@@ -2457,6 +2521,31 @@ let lastPlanText = '';
 let clarifyRound = 0;
 let lastUserText = '';
 let lastShareData = null;   // Tool 6 最新分享数据
+let currentLocation = { province: '上海', city: '上海', district: '浦东', lat: 31.2304, lng: 121.4737 };
+
+// ── UI 辅助函数 ──
+function showToast(msg){
+  // 创建简单的 toast 通知，1.5秒后自动消失
+  const toast = document.createElement('div');
+  toast.textContent = msg;
+  toast.style.cssText = `
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.8); color: white; padding: 12px 20px;
+    border-radius: 6px; font-size: 14px; z-index: 10000; max-width: 300px;
+    word-break: break-word;
+  `;
+  document.body.appendChild(toast);
+  setTimeout(()=>{ toast.remove(); }, 1500);
+}
+
+function modifyPlan(){
+  // 重新编辑行程 - 清除当前方案并回到输入
+  currentPlan = null;
+  lastPlanText = '';
+  document.getElementById('plan-display-modal').classList.remove('open');
+  document.getElementById('user-input').focus();
+  showToast('已清除行程方案，请重新输入');
+}
 
 // ── CLOCK ──
 function updateClock() {
@@ -3033,6 +3122,570 @@ function speakLastPlan() {
 
 // ── UTILS ──
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// 更新側欄時間軸（簡易實作）
+function updateTimelineFromPlan(planItems) {
+  const container = document.getElementById('timeline');
+  if (!container) return;
+  if (!planItems || planItems.length === 0) {
+    container.innerHTML = '<div class="tl-item"><div class="tl-dot upcoming"></div><div class="tl-time">等待规划中…</div><div class="tl-name" style="color:var(--text-4);">告诉我您的需求开始规划</div></div>';
+    return;
+  }
+
+  container.innerHTML = planItems.map((it, idx) => {
+    const time = it.arrival_time || it.time || '--:--';
+    const name = it.name || it.title || '未知地点';
+    const sub  = it.desc || it.address || '';
+    const dotClass = idx === 0 ? 'active' : '';
+    return `
+      <div class="tl-item">
+        <div class="tl-dot ${dotClass}" aria-hidden="true"></div>
+        <div class="tl-time">${time}</div>
+        <div class="tl-name">${name}</div>
+        ${sub ? `<div class="tl-sub">${sub}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+// 產生分享/朗讀用的行程文字（簡易版）
+function generateShareTextFromPlan(planItems, intent) {
+  if (!planItems || planItems.length === 0) return '';
+  const parts = planItems.map((it, i) => {
+    const t = it.arrival_time || it.time || '';
+    const name = it.name || it.title || '';
+    return (t ? (t + ' ') : '') + name;
+  });
+  const head = intent ? `为您规划的行程（${intent.adults} 人）：` : '为您规划的行程：';
+  return head + parts.join(' → ');
+}
+
+// ====== MAP INTEGRATION (预览 + 放大 + 路径规划) ======
+// 注：API Key 已在 HTML head 中定义为 window.AMAP_KEY 和 window.AMAP_SECURITY_JS_CODE
+const AMAP_KEY = window.AMAP_KEY || '';
+const AMAP_SECRET = window.AMAP_SECURITY_JS_CODE || '';
+let _amapPreviewMap = null;
+let _amapFullMap = null;
+let _geocoder = null;
+let _previewMarkers = [];
+let _routeOverlaysPreview = [];
+let _routeOverlaysFull = [];
+let currentRouteInfo = null; // { mode, policy, locs, summaryText, detailsHTML }
+
+function loadAMapIfNeeded() {
+  if (!AMAP_KEY) return Promise.reject(new Error('AMap key 未配置'));
+  if (window.AMap) {
+    window._amapLoaded = true;
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      // 设置安全配置（若存在）
+      if (AMAP_SECRET) window._AMapSecurityConfig = { securityJsCode: AMAP_SECRET };
+      const s = document.createElement('script');
+      // 同时加载 Geolocation 插件以便使用 AMap 的定位能力
+      s.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_KEY}&plugin=AMap.Geocoder,AMap.Driving,AMap.Transfer,AMap.Walking,AMap.PlaceSearch,AMap.Geolocation&callback=__onAmapLoaded`;
+      s.onerror = () => reject(new Error('AMap 脚本加载失败'));
+      window.__onAmapLoaded = () => { window._amapLoaded = true; resolve(); };
+      document.head.appendChild(s);
+    } catch (e) { reject(e); }
+  });
+}
+
+function initPreviewMap() {
+  loadAMapIfNeeded().then(()=>{
+    _amapPreviewMap = new AMap.Map('amap-preview', { resizeEnable: true, zoom: 12, center: [121.4737,31.2304] });
+    _geocoder = new AMap.Geocoder();
+    // 若 AMap.Geolocation 可用，优先使用其定位并在地图上显示定位控件
+    try {
+      if (AMap.Geolocation) {
+        const geo = new AMap.Geolocation({
+          enableHighAccuracy: true,
+          timeout: 10000,
+          showButton: false,
+          zoomToAccuracy: true
+        });
+        _amapPreviewMap.addControl(geo);
+        geo.getCurrentPosition((status, result) => {
+          if (status === 'complete' && result && result.position) {
+            const pos = result.position;
+            currentLocation.lat = pos.lat || pos.latitude || currentLocation.lat;
+            currentLocation.lng = pos.lng || pos.longitude || currentLocation.lng;
+            // 有时返回的是 {lng,lat}
+            if (result.addressComponent) {
+              currentLocation.province = result.addressComponent.province || currentLocation.province;
+              currentLocation.city = result.addressComponent.city || currentLocation.city;
+              currentLocation.district = result.addressComponent.district || currentLocation.district;
+            }
+            if (_amapPreviewMap) _amapPreviewMap.setCenter([currentLocation.lng, currentLocation.lat]);
+            renderPreviewMarkers();
+            updateWeatherForLocation(currentLocation.city);
+          } else {
+            // 失败则退回到已有的 currentLocation
+            renderPreviewMarkers();
+            updateWeatherForLocation((currentLocation && currentLocation.city) || '');
+          }
+        });
+      } else {
+        renderPreviewMarkers();
+        updateWeatherForLocation((currentLocation && currentLocation.city) || '');
+      }
+    } catch(e){
+      renderPreviewMarkers();
+      updateWeatherForLocation((currentLocation && currentLocation.city) || '');
+    }
+  }).catch(err=>{
+    document.getElementById('amap-preview').textContent = '加载地图失败：' + err.message;
+  });
+}
+
+function renderPreviewMarkers() {
+  if (!_amapPreviewMap) return;
+  // clear markers
+  _previewMarkers.forEach(m=>m.setMap(null)); _previewMarkers = [];
+  // filter activities by city match or small distance
+  const city = (window.currentLocation && window.currentLocation.city) || '';
+  const candidates = ACTIVITIES_DB.filter(a => {
+    if (!city) return true;
+    return (a.address && a.address.includes(city)) || (a.distance_km && a.distance_km <= 15);
+  }).slice(0,8);
+
+  candidates.forEach((act,i)=>{
+    // geocode address then add marker
+    const addr = act.address || act.name;
+    _geocoder.getLocation(addr, (status, result) => {
+      if (status === 'complete' && result.geocodes && result.geocodes.length) {
+        const loc = result.geocodes[0].location;
+        const marker = new AMap.Marker({ position: [loc.lng, loc.lat], title: act.name });
+        marker.setMap(_amapPreviewMap);
+        marker.on('click', ()=>{ addMessage('ai', `📍 已选：${act.name}`); });
+        _previewMarkers.push(marker);
+      }
+    });
+  });
+}
+
+function openFullMap(){
+  document.getElementById('mapModal').style.display = 'flex';
+  if (!_amapFullMap) {
+    loadAMapIfNeeded().then(()=>{
+      _amapFullMap = new AMap.Map('amap-full', { resizeEnable:true, zoom:12, center:[121.4737,31.2304] });
+      _geocoder = new AMap.Geocoder();
+      // copy preview markers
+      _previewMarkers.forEach(pm=>{
+        const pos = pm.getPosition();
+        new AMap.Marker({ position: pos, map: _amapFullMap });
+      });
+      // if we already have a planned route on preview, draw it on full map as well
+      if (currentRouteInfo && currentRouteInfo.locs) {
+        // draw without blocking
+        setTimeout(()=>{ drawRouteForMode(currentRouteInfo.mode, currentRouteInfo.locs, currentRouteInfo.policy||'LEAST_TIME', null); }, 200);
+      }
+    }).catch(err=>{ showToast('打开地图失败：'+err.message); });
+  }
+}
+
+function closeFullMap(){ document.getElementById('mapModal').style.display = 'none'; }
+
+async function planRouteOnMap(){
+  if (!currentPlan || !currentPlan.items || currentPlan.items.length < 2) { showToast('请先生成行程并添加至少2个地点'); return; }
+  try{
+    await loadAMapIfNeeded();
+    let mode = document.getElementById('routeModeSelect').value || 'driving';
+    const policy = document.getElementById('routePolicySelect').value || 'LEAST_TIME';
+    const stops = currentPlan.items.slice(0,6);
+    // geocode all stops
+    const locs = [];
+    for (const s of stops) {
+      const addr = s.address || s.name || s.title || '';
+      const pos = await geocodeAddress(addr);
+      if (pos) locs.push(pos);
+    }
+    if (locs.length < 2) { showToast('无法定位行程地点坐标'); return; }
+
+    // helper: draw route for a specific mode and return parsed info
+    function runRouteSearchFor(modeToUse){
+      return new Promise((resolve)=>{
+        const origin = [locs[0].lng, locs[0].lat];
+        const dest = [locs[locs.length-1].lng, locs[locs.length-1].lat];
+        const waypoints = locs.slice(1,-1).map(p=>new AMap.LngLat(p.lng,p.lat));
+        const pluginName = modeToUse === 'driving' ? 'AMap.Driving' : (modeToUse==='transit'?'AMap.Transfer':'AMap.Walking');
+        AMap.plugin([pluginName], function(){
+          try{
+            let routeInstance;
+            if (modeToUse==='driving') routeInstance = new AMap.Driving({map:null, policy: AMap.DrivingPolicy[policy]||AMap.DrivingPolicy.LEAST_TIME});
+            else if (modeToUse==='transit') routeInstance = new AMap.Transfer({map:null, city: (currentLocation&&currentLocation.city)||''});
+            else routeInstance = new AMap.Walking({map:null});
+
+            const cb = function(status, result){
+              // best-effort parse of result to extract duration (min), distance (km), and steps
+              const info = { ok: status==='complete', status, raw: result, duration_min: null, distance_km: null, cost_est: null, steps: [] };
+              try{
+                // search common nested fields
+                function find(obj, key){
+                  if (!obj || typeof obj !== 'object') return undefined;
+                  if (obj.hasOwnProperty(key)) return obj[key];
+                  for (const k in obj){
+                    try{ const v = find(obj[k], key); if (v !== undefined) return v; } catch(e){}
+                  }
+                  return undefined;
+                }
+                const timeVal = find(result, 'time') || find(result, 'duration') || find(result, 'durationMinutes') || find(result, 'duration_min');
+                const distVal = find(result, 'distance') || find(result, 'length') || find(result, 'distanceMeters');
+                if (typeof timeVal === 'number') info.duration_min = Math.round(timeVal/60);
+                if (typeof distVal === 'number') info.distance_km = Math.round((distVal/1000)*10)/10;
+                // transit specific: try routes[0].segments
+                try{
+                  const routes = result.routes || result.route || result.result || null;
+                  if (routes && Array.isArray(routes) && routes.length){
+                    const r0 = routes[0];
+                    if (!info.duration_min){ if (r0.duration) info.duration_min = Math.round(r0.duration/60); }
+                    if (!info.distance_km){ if (r0.distance) info.distance_km = Math.round((r0.distance||0)/1000*10)/10; }
+                    // collect textual steps
+                    const segs = r0.segments || r0.steps || r0.path || r0.buslines || [];
+                    if (Array.isArray(segs)){
+                      segs.forEach(s=>{
+                        const t = s.instruction || s.busline || (s.bus && s.bus.name) || (s.name) || JSON.stringify(s).slice(0,80);
+                        info.steps.push(String(t));
+                      });
+                    }
+                  }
+                }catch(e){}
+                // fallback cost estimate
+                if (info.distance_km != null){
+                  if (modeToUse==='driving') info.cost_est = Math.max(5, Math.round(info.distance_km * 1.5));
+                  else if (modeToUse==='transit') info.cost_est = 3; else info.cost_est = 0;
+                }
+              }catch(e){}
+              resolve(info);
+            };
+
+            if (modeToUse==='driving' && waypoints.length) routeInstance.search(origin, dest, { waypoints }, cb);
+            else routeInstance.search(origin, dest, cb);
+          }catch(err){ resolve({ ok:false, status:'error', raw:err }); }
+        });
+      });
+    }
+
+    // smart mode: evaluate transit/driving/walking and pick best (time+cost)
+    if (mode === 'smart'){
+      showToast('智能推荐：正在计算多种出行方案…');
+      const modesToTry = ['transit','driving','walking'];
+      const results = {};
+      for (const m of modesToTry){
+        // eslint-disable-next-line no-await-in-loop
+        results[m] = await runRouteSearchFor(m);
+      }
+      // score = duration_min * 1.0 + cost_est * 6 (weight cost higher to prefer cheap)
+      let best = null; let bestScore = Infinity;
+      for (const m of modesToTry){
+        const r = results[m];
+        if (!r || !r.ok) continue;
+        const dur = r.duration_min || 999; const cost = r.cost_est || 0;
+        const score = dur + cost * 6;
+        r._score = score;
+        if (score < bestScore){ bestScore = score; best = { mode: m, info: r }; }
+      }
+      if (!best){ showToast('智能推荐未找到可用路线'); return; }
+      mode = best.mode; // chosen mode
+      // draw chosen route on map and show details
+      await drawRouteForMode(mode, locs, policy, best.info);
+      return;
+    }
+
+    // non-smart: draw directly and show details
+    await drawRouteForMode(mode, locs, policy, null);
+  } catch(e){ showToast('路线规划异常:'+e.message); }
+}
+
+// Draw route for a single mode and populate UI with details
+function drawRouteForMode(mode, locs, policy, parsedInfo){
+  return new Promise((resolve)=>{
+    const origin = [locs[0].lng, locs[0].lat];
+    const dest = [locs[locs.length-1].lng, locs[locs.length-1].lat];
+    const waypoints = locs.slice(1,-1).map(p=>new AMap.LngLat(p.lng,p.lat));
+    const pluginName = mode === 'driving' ? 'AMap.Driving' : (mode==='transit'?'AMap.Transfer':'AMap.Walking');
+    // clear previous overlays
+    try{ _routeOverlaysPreview.forEach(o=>o.setMap && o.setMap(null)); _routeOverlaysPreview = []; }catch(e){}
+    try{ _routeOverlaysFull.forEach(o=>o.setMap && o.setMap(null)); _routeOverlaysFull = []; }catch(e){}
+
+    AMap.plugin([pluginName], function(){
+      let routeInstance;
+      try{
+        if (mode==='driving') routeInstance = new AMap.Driving({map:_amapFullMap, policy: AMap.DrivingPolicy[policy]||AMap.DrivingPolicy.LEAST_TIME, hideMarkers:false});
+        else if (mode==='transit') routeInstance = new AMap.Transfer({map:_amapFullMap, city: (currentLocation&&currentLocation.city)||''});
+        else routeInstance = new AMap.Walking({map:_amapFullMap});
+
+        const cb = function(status, result){
+          if (status !== 'complete'){ showToast('路线规划失败：'+status); resolve(); return; }
+          // build summary
+          const summaryEl = document.getElementById('previewRouteSummary');
+          const detailsEl = document.getElementById('routeDetailsPanel');
+          let duration = parsedInfo && parsedInfo.duration_min ? parsedInfo.duration_min : null;
+          let distance = parsedInfo && parsedInfo.distance_km ? parsedInfo.distance_km : null;
+          let stepsText = [];
+          try{
+            // attempt to extract useful fields
+            function collectSteps(obj){
+              if (!obj || typeof obj !== 'object') return;
+              if (Array.isArray(obj.segments)){
+                obj.segments.forEach(s=>{
+                  if (s.buslines && s.buslines.length){ s.buslines.forEach(b=>stepsText.push(b.name || b.line || b)); }
+                  if (s.walking && s.walking.steps){ s.walking.steps.forEach(ws=>stepsText.push(ws.instruction||ws)); }
+                });
+              }
+              if (Array.isArray(obj.steps)){
+                obj.steps.forEach(st=>{ if (st.instruction) stepsText.push(st.instruction); else if (st.busline) stepsText.push(st.busline.name||st.busline); else stepsText.push(JSON.stringify(st).slice(0,80)); });
+              }
+              if (Array.isArray(obj.path)){
+                obj.path.forEach(p=>{ if (p.name) stepsText.push(p.name); });
+              }
+            }
+            collectSteps(result.routes && result.routes[0] ? result.routes[0] : result.route || result);
+          }catch(e){}
+
+          // fallback duration/distance from result
+          try{
+            if (!duration){ duration = (result.routes && result.routes[0] && (result.routes[0].duration||result.routes[0].time)) || (result.route && result.route.time) || null; if (duration) duration = Math.round(duration/60); }
+            if (!distance){ distance = (result.routes && result.routes[0] && (result.routes[0].distance||result.routes[0].length)) || null; if (distance) distance = Math.round((distance/1000)*10)/10; }
+          }catch(e){}
+
+          const modeText = mode==='transit' ? '地铁/公交' : (mode==='driving' ? '驾车' : '步行');
+          const sumText = `${modeText}${distance? ' · ' + distance + 'km' : ''}${duration? ' · ' + duration + 'min' : ''}`;
+          if (summaryEl){ summaryEl.style.display='block'; summaryEl.textContent = sumText; }
+          if (detailsEl){
+            detailsEl.style.display = 'block';
+            let html = `<div style="font-weight:700;margin-bottom:6px">${modeText} 路线详情</div>`;
+            html += `<div style="color:var(--text-3);font-size:12px;margin-bottom:8px">${distance?distance+'km':''}${distance && duration ? ' · ' : ''}${duration?duration+' 分钟':''}</div>`;
+            if (stepsText.length){ html += '<ol style="padding-left:18px;margin:0 0 6px 0">'; stepsText.slice(0,8).forEach(st=>{ html += `<li style="margin-bottom:6px">${st}</li>`; }); html += '</ol>'; }
+            detailsEl.innerHTML = html;
+          }
+
+          // draw markers for each loc with name
+          try{
+            locs.forEach((p, idx)=>{
+              const pos = [p.lng, p.lat];
+              const title = p.name || p.title || p.address || ('地点'+(idx+1));
+              const marker = new AMap.Marker({ position: pos, title: title, map: _amapFullMap });
+              const marker2 = new AMap.Marker({ position: pos, title: title, map: _amapPreviewMap });
+              _routeOverlaysFull.push(marker); _routeOverlaysPreview.push(marker2);
+              const info = new AMap.InfoWindow({ content: `<div style="font-size:13px"><strong>${title}</strong><div style="font-size:12px;color:#666;margin-top:4px">序号：${idx+1}</div></div>` });
+              marker.on('click', ()=>info.open(_amapFullMap, marker.getPosition()));
+              marker2.on('click', ()=>info.open(_amapPreviewMap, marker2.getPosition()));
+            });
+          }catch(e){}
+
+          // annotate segments between points with transport label and time when available
+          try{
+            // try to extract path polyline from result (SDK returns plans)
+            const routeObj = (result.routes && result.routes[0]) || result.route || result;
+            const segments = routeObj.segments || routeObj.steps || routeObj.path || [];
+            // build simple polylines by linking locs
+            for (let i=0;i<locs.length-1;i++){
+              const p1 = new AMap.LngLat(locs[i].lng, locs[i].lat);
+              const p2 = new AMap.LngLat(locs[i+1].lng, locs[i+1].lat);
+              const poly = new AMap.Polyline({ path: [p1,p2], strokeColor: '#3366FF', strokeWeight: 4, strokeOpacity:0.8, map: _amapFullMap });
+              const poly2 = new AMap.Polyline({ path: [p1,p2], strokeColor: '#99BBFF', strokeWeight: 3, strokeOpacity:0.7, map: _amapPreviewMap });
+              _routeOverlaysFull.push(poly); _routeOverlaysPreview.push(poly2);
+              // add label in middle
+              try{
+                const mid = new AMap.LngLat((locs[i].lng+locs[i+1].lng)/2, (locs[i].lat+locs[i+1].lat)/2);
+                const segLabel = new AMap.Marker({ position: mid, content: `<div style="padding:4px 8px;background:#fff;border:1px solid var(--border);border-radius:6px;font-size:12px;color:#333">${(segments[i]&&segments[i].transport) || (segments[i]&&segments[i].vehicle) || (segments[i]&&segments[i].instruction) || (i===0?'出发':'路段')}</div>`, offset: new AMap.Pixel(-40,-20), map: _amapFullMap });
+                const segLabel2 = new AMap.Marker({ position: mid, content: `<div style="padding:3px 6px;background:#fff;border-radius:6px;font-size:11px;color:#333">${(segments[i]&&segments[i].transport) || (i===0?'出发':'路段')}</div>`, offset: new AMap.Pixel(-30,-16), map: _amapPreviewMap });
+                _routeOverlaysFull.push(segLabel); _routeOverlaysPreview.push(segLabel2);
+              }catch(e){}
+            }
+          }catch(e){}
+
+          // save global route info
+          currentRouteInfo = { mode, policy, locs, summaryText: sumText, detailsHTML: detailsEl ? detailsEl.innerHTML : '' };
+
+          // finally, trigger actual drawing (some SDKs require route instance created with map to draw)
+          try{
+            // re-create a drawing route instance bound to map to render
+            if (mode==='driving'){
+              const r2 = new AMap.Driving({map:_amapFullMap, policy: AMap.DrivingPolicy[policy]||AMap.DrivingPolicy.LEAST_TIME});
+              if (_amapPreviewMap) { const rp = new AMap.Driving({map:_amapPreviewMap, policy: AMap.DrivingPolicy[policy]||AMap.DrivingPolicy.LEAST_TIME}); if (waypoints && waypoints.length) rp.search(origin,dest,{ waypoints }, ()=>{}); else rp.search(origin,dest,()=>{}); }
+              if (waypoints && waypoints.length) r2.search(origin, dest, { waypoints }, ()=>resolve()); else r2.search(origin,dest,()=>resolve());
+            } else if (mode==='transit'){
+              const r2 = new AMap.Transfer({map:_amapFullMap, city: (currentLocation&&currentLocation.city)||''});
+              if (_amapPreviewMap) { const rp = new AMap.Transfer({map:_amapPreviewMap, city: (currentLocation&&currentLocation.city)||''}); rp.search(origin,dest,()=>{}); }
+              r2.search(origin,dest,()=>resolve());
+            } else {
+              const r2 = new AMap.Walking({map:_amapFullMap});
+              if (_amapPreviewMap) { const rp = new AMap.Walking({map:_amapPreviewMap}); rp.search(origin,dest,()=>{}); }
+              r2.search(origin,dest,()=>resolve());
+            }
+          }catch(e){ resolve(); }
+        };
+
+        if (mode==='driving' && waypoints.length) routeInstance.search(origin, dest, { waypoints }, cb);
+        else routeInstance.search(origin, dest, cb);
+      }catch(err){ showToast('路线绘制失败'); resolve(); }
+    });
+  });
+}
+
+function geocodeAddress(addr){
+  return new Promise((resolve)=>{
+    if (!addr || ! _geocoder) return resolve(null);
+    _geocoder.getLocation(addr, (status, result)=>{
+      if (status==='complete' && result.geocodes && result.geocodes.length) {
+        const g = result.geocodes[0]; resolve({lat: g.location.lat, lng: g.location.lng});
+      } else resolve(null);
+    });
+  });
+}
+
+// ===== WEATHER (使用 Seniverse if available) =====
+function updateWeatherForLocation(city){
+  const key = window.WEATHER_API_KEY || '';
+  const el = document.getElementById('weather-info');
+  if(!key || !city){ if(el) el.textContent = '天气信息不可用'; return; }
+  const url = `https://api.seniverse.com/v3/weather/now.json?key=${encodeURIComponent(key)}&location=${encodeURIComponent(city)}&language=zh-Hans&unit=c`;
+  fetch(url).then(r=>r.json()).then(data=>{
+    try{
+      const now = data.results && data.results[0] && data.results[0].now;
+      if(now){ el.textContent = `${now.text}，${now.temperature}°C`; }
+      else el.textContent = '天气信息获取失败';
+    }catch(e){ el.textContent = '天气解析错误'; }
+  }).catch(err=>{ el.textContent = '天气加载失败'; });
+}
+
+// ===== Travel panel helpers =====
+function toggleTravelPanel(){ const p=document.getElementById('travel-panel'); const btn=document.getElementById('travel-expand-btn'); if(p.style.display==='none'){ p.style.display='block'; btn.textContent='收起'; } else { p.style.display='none'; btn.textContent='展开'; } }
+function collapseTravelPanel(){ document.getElementById('travel-panel').style.display='none'; document.getElementById('travel-expand-btn').textContent='展开'; }
+
+// Plan route using suggestion controls: use currentPlan if exists, otherwise use lastPlan/current selection
+function planRouteFromSuggestion(){
+  // sync selects to full map controls then open full map and plan
+  const mode = document.getElementById('travel-mode-select').value;
+  const policy = document.getElementById('travel-policy-select').value;
+  document.getElementById('routeModeSelect').value = mode || 'driving';
+  document.getElementById('routePolicySelect').value = policy;
+  openFullMap();
+  // ensure currentPlan exists; if not, try to build from plan cards in DOM
+  if(!currentPlan || !currentPlan.items || currentPlan.items.length<2){
+    // try to build from plan cards if present
+    // fallback: use first two activities from ACTIVITIES_DB
+    currentPlan = { items: ACTIVITIES_DB.slice(0,3).map(a=>({ name:a.name, address:a.address })) };
+  }
+  planRouteOnMap();
+}
+
+// ====== 简化的省市区选择（供导航之用） ======
+const MINI_REGIONS = { '上海市':{'上海市':['黄浦区','徐汇区','长宁区','静安区','浦东新区']}, '北京市':{'北京市':['东城区','西城区']}};
+function toggleLocDropdown(e){
+  const d = document.getElementById('locDropdown'); d.style.display = d.style.display==='none'?'block':'none';
+  if (d.style.display==='block') populateMiniProvinces();
+}
+function populateMiniProvinces(){
+  const sel = document.getElementById('selProvinceMini'); sel.innerHTML=''; Object.keys(MINI_REGIONS).forEach(p=>{ const o=document.createElement('option'); o.value=p; o.textContent=p; sel.appendChild(o); });
+}
+function loadCitiesMini(){ const p=document.getElementById('selProvinceMini').value; const city=document.getElementById('selCityMini'); city.innerHTML=''; if(!p){city.disabled=true;return;} Object.keys(MINI_REGIONS[p]).forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; city.appendChild(o); }); city.disabled=false; }
+function loadDistrictsMini(){ const p=document.getElementById('selProvinceMini').value; const c=document.getElementById('selCityMini').value; const d=document.getElementById('selDistrictMini'); d.innerHTML=''; if(!p||!c){d.disabled=true;return;} (MINI_REGIONS[p][c]||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x; o.textContent=x; d.appendChild(o); }); d.disabled=false; }
+function confirmLocationMini(){
+  const p=document.getElementById('selProvinceMini').value;
+  const c=document.getElementById('selCityMini').value;
+  const d=document.getElementById('selDistrictMini').value;
+  if(!p){showToast('请先选择省份');return;}
+  currentLocation = { province:p, city:c||p, district:d||c||p, lat:31.2304, lng:121.4737 };
+  document.getElementById('locDisplay').textContent = currentLocation.city;
+  document.getElementById('locDropdown').style.display='none';
+  renderPreviewMarkers();
+  updateWeatherForLocation(currentLocation.city);
+  if (_amapPreviewMap) _amapPreviewMap.setCenter([currentLocation.lng,currentLocation.lat]);
+}
+
+// Auto-locate using browser geolocation
+function autoLocate(){
+  // 优先使用 AMap 的定位（若已加载），否则回退到浏览器 geolocation
+  if (window.AMap && AMap.Geolocation) {
+    try{
+      const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 10000, showButton: false, zoomToAccuracy: true });
+      // 如果有地图实例，把控件加入地图
+      if (_amapPreviewMap) _amapPreviewMap.addControl(geo);
+      geo.getCurrentPosition((status, result) => {
+        if (status === 'complete' && result && result.position) {
+          const pos = result.position;
+          currentLocation.lat = pos.lat || pos.latitude || currentLocation.lat;
+          currentLocation.lng = pos.lng || pos.longitude || currentLocation.lng;
+          if (result.addressComponent) {
+            currentLocation.province = result.addressComponent.province || currentLocation.province;
+            currentLocation.city = result.addressComponent.city || result.addressComponent.province || currentLocation.city;
+            currentLocation.district = result.addressComponent.district || currentLocation.district;
+          }
+          document.getElementById('locDisplay').textContent = currentLocation.city || '已定位';
+          if (_amapPreviewMap) _amapPreviewMap.setCenter([currentLocation.lng,currentLocation.lat]);
+          renderPreviewMarkers();
+          updateWeatherForLocation(currentLocation.city);
+        } else {
+          showToast('定位失败，使用默认城市');
+        }
+      });
+    }catch(e){
+      showToast('AMap 定位异常，回退浏览器定位');
+      navigatorGeolocationFallback();
+    }
+  } else {
+    navigatorGeolocationFallback();
+  }
+}
+
+function navigatorGeolocationFallback(){
+  if (!navigator.geolocation) { showToast('浏览器不支持定位'); return; }
+  navigator.geolocation.getCurrentPosition(pos=>{
+    currentLocation.lat = pos.coords.latitude;
+    currentLocation.lng = pos.coords.longitude;
+    document.getElementById('locDisplay').textContent = currentLocation.city || '已定位';
+    if (_amapPreviewMap) _amapPreviewMap.setCenter([currentLocation.lng,currentLocation.lat]);
+    // 尝试逆地理编码
+    if (_geocoder) {
+      _geocoder.getAddress([currentLocation.lng,currentLocation.lat], (status, result) => {
+        if (status === 'complete' && result.regeocode && result.regeocode.addressComponent) {
+          const addr = result.regeocode.addressComponent;
+          currentLocation.province = addr.province || currentLocation.province;
+          currentLocation.city = addr.city || addr.province || currentLocation.city;
+          currentLocation.district = addr.district || currentLocation.district;
+        }
+        renderPreviewMarkers();
+        updateWeatherForLocation(currentLocation.city || '');
+      });
+    } else {
+      renderPreviewMarkers();
+      updateWeatherForLocation(currentLocation.city || '');
+    }
+  }, err=>{ showToast('定位失败，使用默认城市'); }, {timeout:8000});
+}
+
+// 初始化页面 - 确保地图和定位在 DOM 加载完成后初始化
+if (AMAP_KEY) {
+  if (document.readyState === 'loading') {
+    // DOM 还在加载
+    document.addEventListener('DOMContentLoaded', function initMapAndLocation() {
+      document.removeEventListener('DOMContentLoaded', initMapAndLocation);
+      setTimeout(()=>{
+        initPreviewMap();
+        const locDisplay = document.getElementById('locDisplay');
+        if (locDisplay) locDisplay.textContent = (currentLocation && currentLocation.city) || '定位中';
+        const selProvince = document.getElementById('selProvinceMini');
+        const selCity = document.getElementById('selCityMini');
+        if (selProvince) selProvince.addEventListener('change', loadCitiesMini);
+        if (selCity) selCity.addEventListener('change', loadDistrictsMini);
+      }, 100);
+    });
+  } else {
+    // DOM 已加载
+    setTimeout(()=>{
+      initPreviewMap();
+      const locDisplay = document.getElementById('locDisplay');
+      if (locDisplay) locDisplay.textContent = (currentLocation && currentLocation.city) || '定位中';
+      const selProvince = document.getElementById('selProvinceMini');
+      const selCity = document.getElementById('selCityMini');
+      if (selProvince) selProvince.addEventListener('change', loadCitiesMini);
+      if (selCity) selCity.addEventListener('change', loadDistrictsMini);
+    }, 100);
+  }
+}
 </script>
 </body>
 </html>

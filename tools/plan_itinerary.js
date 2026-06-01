@@ -72,11 +72,12 @@ async function planItinerary(intent, activities, restaurants, options) {
 
   // 构建尝试链（有 key 的才加入）
   var providers = [];
-  if (glmApiKey)      providers.push({ name: 'zhipu',    fn: function() { return callAI(PLAN_GLM_URL,      PLAN_GLM_MODEL,      glmApiKey,      systemPrompt, context, onStream); } });
-  if (deepseekApiKey) providers.push({ name: 'deepseek', fn: function() { return callAI(PLAN_DEEPSEEK_URL, PLAN_DEEPSEEK_MODEL, deepseekApiKey, systemPrompt, context, null);     } });
-  if (longcatApiKey)  providers.push({ name: 'longcat',  fn: function() { return callAI(PLAN_LONGCAT_URL,  PLAN_LONGCAT_MODEL,  longcatApiKey,  systemPrompt, context, null);     } });
+  if (glmApiKey)      providers.push({ name: 'zhipu',    fn: function() { return callAI(PLAN_GLM_URL,      PLAN_GLM_MODEL,      glmApiKey,      systemPrompt, context, onStream, 'zhipu'); } });
+  if (deepseekApiKey) providers.push({ name: 'deepseek', fn: function() { return callAI(PLAN_DEEPSEEK_URL, PLAN_DEEPSEEK_MODEL, deepseekApiKey, systemPrompt, context, null, 'deepseek'); } });
+  if (longcatApiKey)  providers.push({ name: 'longcat',  fn: function() { return callAI(PLAN_LONGCAT_URL,  PLAN_LONGCAT_MODEL,  longcatApiKey,  systemPrompt, context, null, 'longcat'); } });
 
   var lastError = null;
+  var lastErrors = [];
 
   for (var i = 0; i < providers.length; i++) {
     var provider = providers[i];
@@ -87,19 +88,20 @@ async function planItinerary(intent, activities, restaurants, options) {
       var enriched = enrichPlan(plan, activities, restaurants);
       return { ok: true, plan: enriched, source: provider.name };
     } catch (err) {
-      console.warn('[plan_itinerary] ' + provider.name + ' 失败:', err.message);
+      console.warn('[plan_itinerary] ' + provider.name + ' 失败:', err && err.message ? err.message : err);
       lastError = err;
+      lastErrors.push({ provider: provider.name, message: err && err.message ? err.message : String(err), status: err && err.status ? err.status : null, body: err && err.body ? err.body : null });
     }
   }
 
   // 全部 AI 失败 → 规则降级，仍返回可用结果
-  console.warn('[plan_itinerary] 全部 AI 失败，规则降级');
+  console.warn('[plan_itinerary] 全部 AI 失败，规则降级', lastErrors);
   var fallback = ruleFallbackPlan(intent, activities, restaurants);
-  return { ok: false, error: (lastError && lastError.message) || '未知错误', plan: fallback, source: 'rule' };
+  return { ok: false, error: (lastError && lastError.message) || '未知错误', lastErrors: lastErrors, plan: fallback, source: 'rule' };
 }
 
 // ── 统一 AI 调用（支持 GLM 流式 + 普通） ─────────────────────
-async function callAI(url, model, apiKey, systemPrompt, context, onStream) {
+async function callAI(url, model, apiKey, systemPrompt, context, onStream, providerName) {
   var useStream = typeof onStream === 'function';
   var res = await fetch(url, {
     method: 'POST',
@@ -122,8 +124,12 @@ async function callAI(url, model, apiKey, systemPrompt, context, onStream) {
 
   if (!res.ok) {
     var body = await res.text();
-    throw new Error(url.includes('bigmodel') ? 'GLM' : url.includes('deepseek') ? 'DeepSeek' : 'LongCat' +
-      ' HTTP ' + res.status + ': ' + body.slice(0, 120));
+    var name = providerName || (url.includes('bigmodel') ? 'GLM' : url.includes('deepseek') ? 'DeepSeek' : 'LongCat');
+    var err = new Error(name + ' HTTP ' + res.status + ': ' + body.slice(0, 200));
+    // attach extra info for callers
+    err.status = res.status;
+    err.body = body;
+    throw err;
   }
 
   if (useStream) return await readStream(res, onStream);
