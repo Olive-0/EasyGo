@@ -1,0 +1,863 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>美团·周末活动规划 Agent</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --primary:#1A6B4A;
+  --primary-light:#E8F5EE;
+  --primary-mid:#2E9E6F;
+  --accent:#D4782A;
+  --accent-light:#FDF1E6;
+  --bg:#F7F5F0;
+  --white:#FFFFFF;
+  --text:#1C1C1C;
+  --text2:#5A5A5A;
+  --text3:#9A9A9A;
+  --border:#E2DDD5;
+  --shadow:0 2px 12px rgba(0,0,0,0.08);
+  --shadow-lg:0 8px 32px rgba(0,0,0,0.12);
+  --radius:12px;
+  --radius-lg:18px;
+}
+body{font-family:'Noto Sans SC',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+
+/* ===== TOP BAR ===== */
+.topbar{
+  position:fixed;top:0;left:0;right:0;z-index:1000;
+  height:60px;background:rgba(255,255,255,0.95);
+  backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 20px;
+}
+.logo{display:flex;align-items:center;gap:8px}
+.logo-icon{width:34px;height:34px;background:var(--primary);border-radius:10px;display:flex;align-items:center;justify-content:center}
+.logo-icon svg{width:18px;height:18px;fill:#fff}
+.logo-text{font-family:'Noto Serif SC',serif;font-size:17px;font-weight:700;color:var(--primary);letter-spacing:0.5px}
+.logo-sub{font-size:11px;color:var(--text3);margin-top:1px}
+
+/* ===== LOCATION WIDGET ===== */
+.location-widget{
+  display:flex;align-items:center;gap:8px;
+  background:var(--bg);border:1px solid var(--border);
+  border-radius:24px;padding:6px 14px 6px 10px;
+  cursor:pointer;transition:all 0.2s;position:relative;
+}
+.location-widget:hover{border-color:var(--primary);background:var(--primary-light)}
+.loc-dot{width:10px;height:10px;background:var(--primary-mid);border-radius:50%;flex-shrink:0;box-shadow:0 0 0 3px rgba(46,158,111,0.2);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 3px rgba(46,158,111,0.2)}50%{box-shadow:0 0 0 6px rgba(46,158,111,0.1)}}
+.loc-text{font-size:13px;font-weight:500;color:var(--text)}
+.loc-sub{font-size:11px;color:var(--text3)}
+.loc-arrow{font-size:10px;color:var(--text3);margin-left:2px}
+
+/* ===== LOCATION DROPDOWN ===== */
+.loc-dropdown{
+  display:none;position:absolute;top:calc(100% + 10px);right:0;
+  background:var(--white);border:1px solid var(--border);
+  border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);
+  width:340px;padding:16px;z-index:2000;
+}
+.loc-dropdown.open{display:block}
+.loc-dropdown h4{font-size:13px;font-weight:500;color:var(--text2);margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.loc-tabs{display:flex;gap:6px;margin-bottom:14px}
+.loc-tab{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);transition:all 0.15s}
+.loc-tab.active,.loc-tab:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+.cascade-row{display:flex;gap:6px;margin-bottom:10px}
+.cascade-select{flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Noto Sans SC',sans-serif;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239A9A9A' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;padding-right:24px;cursor:pointer}
+.cascade-select:focus{outline:none;border-color:var(--primary)}
+.loc-confirm{width:100%;padding:9px;background:var(--primary);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;font-family:'Noto Sans SC',sans-serif;transition:background 0.15s}
+.loc-confirm:hover{background:var(--primary-mid)}
+.auto-locate-btn{width:100%;padding:8px;background:var(--primary-light);color:var(--primary);border:1px solid rgba(26,107,74,0.2);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;font-family:'Noto Sans SC',sans-serif;margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:6px;transition:all 0.15s}
+.auto-locate-btn:hover{background:var(--primary);color:#fff}
+
+/* ===== MAIN LAYOUT ===== */
+.main{padding-top:60px;display:flex;height:100vh}
+.sidebar{width:380px;flex-shrink:0;background:var(--white);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.map-area{flex:1;position:relative;background:#E8E4DC}
+
+/* ===== SEARCH BAR ===== */
+.search-section{padding:16px 16px 0}
+.search-box{display:flex;gap:8px}
+.search-input{flex:1;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;font-family:'Noto Sans SC',sans-serif;color:var(--text);background:var(--bg);transition:border-color 0.15s}
+.search-input:focus{outline:none;border-color:var(--primary);background:#fff}
+.search-btn{padding:10px 16px;background:var(--primary);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:'Noto Sans SC',sans-serif;white-space:nowrap;transition:background 0.15s}
+.search-btn:hover{background:var(--primary-mid)}
+
+/* ===== CATEGORY TABS ===== */
+.cat-tabs{display:flex;gap:6px;padding:12px 16px;overflow-x:auto;scrollbar-width:none}
+.cat-tabs::-webkit-scrollbar{display:none}
+.cat-tag{padding:5px 12px;border-radius:16px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--white);color:var(--text2);white-space:nowrap;transition:all 0.15s;flex-shrink:0}
+.cat-tag.active,.cat-tag:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+
+/* ===== SPOTS LIST ===== */
+.spots-header{padding:0 16px 10px;display:flex;align-items:center;justify-content:space-between}
+.spots-title{font-size:13px;font-weight:500;color:var(--text2)}
+.spots-count{font-size:12px;color:var(--text3)}
+.spots-list{flex:1;overflow-y:auto;padding:0 16px 16px}
+.spots-list::-webkit-scrollbar{width:4px}
+.spots-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+.spot-card{
+  background:var(--white);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px;margin-bottom:10px;
+  cursor:pointer;transition:all 0.2s;display:flex;gap:12px;
+}
+.spot-card:hover,.spot-card.selected{border-color:var(--primary);box-shadow:0 2px 8px rgba(26,107,74,0.12)}
+.spot-card.selected{background:var(--primary-light)}
+.spot-img{width:72px;height:72px;border-radius:8px;object-fit:cover;background:var(--bg);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:28px;overflow:hidden}
+.spot-info{flex:1;min-width:0}
+.spot-name{font-size:14px;font-weight:500;color:var(--text);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spot-meta{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.spot-rating{font-size:11px;color:var(--accent);font-weight:600}
+.spot-dist{font-size:11px;color:var(--text3)}
+.spot-tags{display:flex;gap:4px;flex-wrap:wrap}
+.spot-tag{padding:2px 8px;background:var(--primary-light);color:var(--primary);border-radius:10px;font-size:10px;font-weight:500}
+.spot-tag.hot{background:var(--accent-light);color:var(--accent)}
+.add-route-btn{
+  margin-top:6px;padding:4px 10px;background:transparent;
+  border:1px solid var(--primary);border-radius:6px;
+  font-size:11px;color:var(--primary);cursor:pointer;
+  font-family:'Noto Sans SC',sans-serif;transition:all 0.15s;
+}
+.add-route-btn:hover,.add-route-btn.added{background:var(--primary);color:#fff}
+
+/* ===== ROUTE PANEL ===== */
+.route-panel{
+  background:var(--white);border-top:1px solid var(--border);
+  padding:14px 16px;
+}
+.route-title{font-size:13px;font-weight:500;color:var(--text);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+.route-title span{font-size:11px;color:var(--text3);font-weight:400}
+.route-stops{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;max-height:120px;overflow-y:auto}
+.route-stop{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+.stop-num{width:20px;height:20px;background:var(--primary);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;flex-shrink:0}
+.stop-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stop-del{width:16px;height:16px;color:var(--text3);cursor:pointer;font-size:14px;line-height:1;flex-shrink:0;border:none;background:none;transition:color 0.15s}
+.stop-del:hover{color:#D84040}
+.route-mode-tabs{display:flex;gap:6px;margin-bottom:10px}
+.mode-tab{flex:1;padding:7px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text2);transition:all 0.15s;text-align:center;font-family:'Noto Sans SC',sans-serif}
+.mode-tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.sort-tabs{display:flex;gap:4px;margin-bottom:10px}
+.sort-label{font-size:11px;color:var(--text3);align-self:center;margin-right:4px}
+.sort-tab{padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--white);color:var(--text2);transition:all 0.15s;font-family:'Noto Sans SC',sans-serif}
+.sort-tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.plan-route-btn{width:100%;padding:10px;background:var(--primary);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:'Noto Sans SC',sans-serif;transition:background 0.15s;display:flex;align-items:center;justify-content:center;gap:6px}
+.plan-route-btn:hover{background:var(--primary-mid)}
+.plan-route-btn:disabled{background:var(--border);cursor:not-allowed}
+
+/* ===== MAP AREA ===== */
+.map-container{width:100%;height:100%;position:relative}
+#amap-container{width:100%;height:100%}
+
+/* ===== MAP MOCK (until API loaded) ===== */
+.map-mock{
+  width:100%;height:100%;
+  background:linear-gradient(160deg,#EAF2EC 0%,#D5E8DC 30%,#C8DDD0 60%,#D8E8DF 100%);
+  display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:12px;position:relative;overflow:hidden;
+}
+.map-mock::before{
+  content:'';position:absolute;inset:0;
+  background-image:
+    linear-gradient(var(--border) 1px,transparent 1px),
+    linear-gradient(90deg,var(--border) 1px,transparent 1px);
+  background-size:60px 60px;
+  opacity:0.3;
+}
+.map-mock-road{position:absolute;background:rgba(255,255,255,0.7);border-radius:3px}
+.road1{width:80%;height:8px;top:35%;left:10%;transform:rotate(-3deg)}
+.road2{width:6px;height:70%;top:15%;left:42%;transform:rotate(2deg)}
+.road3{width:45%;height:6px;top:60%;left:30%;transform:rotate(1deg)}
+.map-mock-msg{
+  background:rgba(255,255,255,0.92);
+  border:1px solid var(--border);border-radius:12px;
+  padding:16px 20px;text-align:center;z-index:10;max-width:280px;
+}
+.map-mock-msg h3{font-size:15px;font-weight:600;color:var(--primary);margin-bottom:6px}
+.map-mock-msg p{font-size:12px;color:var(--text2);line-height:1.6}
+.map-mock-msg code{
+  display:block;background:var(--bg);border:1px solid var(--border);
+  border-radius:6px;padding:6px 10px;margin-top:8px;
+  font-size:11px;color:var(--text);word-break:break-all;font-family:monospace;
+}
+
+/* ===== MAP PINS ===== */
+.map-pins{position:absolute;inset:0;pointer-events:none;z-index:5}
+.map-pin{
+  position:absolute;transform:translate(-50%,-100%);
+  pointer-events:all;cursor:pointer;transition:transform 0.2s;
+}
+.map-pin:hover{transform:translate(-50%,-100%) scale(1.15)}
+.pin-inner{
+  background:var(--primary);color:#fff;
+  padding:5px 10px;border-radius:16px;font-size:11px;font-weight:600;
+  white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.2);
+  border:2px solid #fff;
+}
+.pin-inner::after{
+  content:'';position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);
+  border:5px solid transparent;border-top:5px solid var(--primary);
+}
+.pin-inner.selected{background:var(--accent)}
+.pin-inner.selected::after{border-top-color:var(--accent)}
+
+/* ===== ROUTE INFO OVERLAY ===== */
+.route-info{
+  position:absolute;bottom:20px;right:20px;z-index:100;
+  background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
+  border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:14px 16px;min-width:200px;box-shadow:var(--shadow-lg);
+  display:none;
+}
+.route-info.show{display:block}
+.ri-title{font-size:12px;color:var(--text3);margin-bottom:6px}
+.ri-stats{display:flex;gap:16px}
+.ri-stat h4{font-size:20px;font-weight:700;color:var(--primary)}
+.ri-stat p{font-size:11px;color:var(--text2)}
+
+/* ===== TOAST ===== */
+.toast{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:#1C1C1C;color:#fff;padding:10px 20px;border-radius:24px;
+  font-size:13px;font-weight:500;z-index:9999;transition:transform 0.3s ease;
+  pointer-events:none;
+}
+.toast.show{transform:translateX(-50%) translateY(0)}
+
+/* ===== LOADING ===== */
+.locating-badge{
+  position:absolute;top:16px;left:50%;transform:translateX(-50%);
+  background:rgba(255,255,255,0.95);border:1px solid var(--border);
+  border-radius:20px;padding:6px 14px;font-size:12px;color:var(--primary);
+  font-weight:500;display:flex;align-items:center;gap:6px;z-index:20;
+}
+.spin{animation:spin 1s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+      </svg>
+    </div>
+    <div>
+      <div class="logo-text">旅途探索</div>
+      <div class="logo-sub">智能旅游地图</div>
+    </div>
+  </div>
+
+  <!-- LOCATION WIDGET -->
+  <div class="location-widget" id="locWidget" onclick="toggleLocDropdown()">
+    <div class="loc-dot" id="locDot"></div>
+    <div>
+      <div class="loc-text" id="locText">正在定位...</div>
+      <div class="loc-sub" id="locSub">自动定位中</div>
+    </div>
+    <div class="loc-arrow">▾</div>
+
+    <!-- DROPDOWN -->
+    <div class="loc-dropdown" id="locDropdown" onclick="event.stopPropagation()">
+      <h4>📍 选择位置</h4>
+      <button class="auto-locate-btn" onclick="autoLocate()">
+        <span class="spin" id="autoSpinner" style="display:none">⟳</span>
+        <span>🎯 重新自动定位</span>
+      </button>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-align:center">— 或手动选择 —</div>
+      <div class="cascade-row">
+        <select class="cascade-select" id="selProvince" onchange="loadCities()">
+          <option value="">选择省份</option>
+        </select>
+      </div>
+      <div class="cascade-row">
+        <select class="cascade-select" id="selCity" onchange="loadDistricts()" disabled>
+          <option value="">选择城市</option>
+        </select>
+        <select class="cascade-select" id="selDistrict" disabled>
+          <option value="">选择区域</option>
+        </select>
+      </div>
+      <button class="loc-confirm" onclick="confirmLocation()">确认位置，刷新推荐</button>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <!-- SEARCH -->
+    <div class="search-section">
+      <div class="search-box">
+        <input class="search-input" type="text" placeholder="搜索景点、城市..." id="searchInput">
+        <button class="search-btn" onclick="searchSpots()">搜索</button>
+      </div>
+    </div>
+
+    <!-- CATEGORIES -->
+    <div class="cat-tabs">
+      <div class="cat-tag active" onclick="filterCat(this,'all')">全部</div>
+      <div class="cat-tag" onclick="filterCat(this,'natural')">🏔 自然风光</div>
+      <div class="cat-tag" onclick="filterCat(this,'culture')">🏛 人文历史</div>
+      <div class="cat-tag" onclick="filterCat(this,'food')">🍜 美食打卡</div>
+      <div class="cat-tag" onclick="filterCat(this,'park')">🌿 公园休闲</div>
+      <div class="cat-tag" onclick="filterCat(this,'night')">🌙 夜游娱乐</div>
+    </div>
+
+    <!-- SPOTS -->
+    <div class="spots-header">
+      <div class="spots-title" id="spotsTitle">附近推荐景点</div>
+      <div class="spots-count" id="spotsCount">加载中...</div>
+    </div>
+    <div class="spots-list" id="spotsList"></div>
+
+    <!-- ROUTE PANEL -->
+    <div class="route-panel">
+      <div class="route-title">
+        路线规划
+        <span id="routeStopsCount">已添加 0 个站点</span>
+      </div>
+      <div class="route-stops" id="routeStops">
+        <div style="font-size:12px;color:var(--text3);text-align:center;padding:8px 0">
+          点击景点卡片的「+规划」按钮添加站点
+        </div>
+      </div>
+
+      <!-- TRANSPORT MODE -->
+      <div class="route-mode-tabs">
+        <button class="mode-tab active" onclick="setMode(this,'driving')">🚗 驾车</button>
+        <button class="mode-tab" onclick="setMode(this,'transit')">🚇 公交</button>
+        <button class="mode-tab" onclick="setMode(this,'walking')">🚶 步行</button>
+      </div>
+
+      <!-- SORT OPTIONS -->
+      <div class="sort-tabs">
+        <div class="sort-label">排序</div>
+        <button class="sort-tab active" onclick="setSort(this,'fastest')">最快</button>
+        <button class="sort-tab" onclick="setSort(this,'shortest')">最短</button>
+        <button class="sort-tab" onclick="setSort(this,'economy')">经济</button>
+      </div>
+
+      <button class="plan-route-btn" id="planRouteBtn" onclick="planRoute()" disabled>
+        <span>🗺</span> 规划最优路线
+      </button>
+    </div>
+  </div>
+
+  <!-- MAP AREA -->
+  <div class="map-area">
+    <div id="amap-container" style="display:none"></div>
+
+    <!-- MOCK MAP (显示配置说明) -->
+    <div class="map-mock" id="mapMock">
+      <div class="map-mock-road road1"></div>
+      <div class="map-mock-road road2"></div>
+      <div class="map-mock-road road3"></div>
+
+      <!-- MAP PINS MOCK -->
+      <div class="map-pins" id="mapPins"></div>
+
+      <div class="map-mock-msg">
+        <h3>🗺 接入高德地图 API</h3>
+        <p>在下方替换您的 API Key，即可启用真实地图、定位与路线规划功能</p>
+        <code>AMAP_KEY = "您的高德地图Key"</code>
+        <div style="margin-top:8px;font-size:10px;color:var(--text3)">
+          前往 <a href="https://lbs.amap.com" target="_blank" style="color:var(--primary)">lbs.amap.com</a> 申请免费 Key
+        </div>
+      </div>
+    </div>
+
+    <!-- LOCATING BADGE -->
+    <div class="locating-badge" id="locatingBadge" style="display:none">
+      <span class="spin">⟳</span> 正在获取您的位置...
+    </div>
+
+    <!-- ROUTE INFO OVERLAY -->
+    <div class="route-info" id="routeInfo">
+      <div class="ri-title">当前路线</div>
+      <div class="ri-stats">
+        <div class="ri-stat">
+          <h4 id="riDist">—</h4>
+          <p>总距离</p>
+        </div>
+        <div class="ri-stat">
+          <h4 id="riTime">—</h4>
+          <p>预计时间</p>
+        </div>
+        <div class="ri-stat">
+          <h4 id="riStops">—</h4>
+          <p>途经站点</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+  <script src="config.js"></script>
+
+  <script>
+// ============ CONFIG (从 config.js 注入，如不存在则回退到硬编码) ============
+const AMAP_KEY = (window.APP_CONFIG && window.APP_CONFIG.AMAP_KEY) || (window.__ENV__ && window.__ENV__.VITE_AMAP_KEY) || "";
+const AMAP_SECRET = (window.APP_CONFIG && window.APP_CONFIG.AMAP_SECURITY_JS_CODE) || (window.__ENV__ && window.__ENV__.VITE_AMAP_SECURITY_JS_CODE) || "";
+
+// ============ STATE ============
+let currentLocation = { province:"上海市", city:"上海市", district:"黄浦区", lat:31.2304, lng:121.4737 };
+let routeStops = [];
+let currentMode = "driving";
+let currentSort = "fastest";
+let currentCat = "all";
+let amapLoaded = false;
+let mapInstance = null;
+let drivingInstance = null;
+
+// ============ CHINA REGIONS DATA ============
+const regions = {
+  "北京市":{"北京市":["东城区","西城区","朝阳区","丰台区","石景山区","海淀区","顺义区","通州区","大兴区","房山区"]},
+  "上海市":{"上海市":["黄浦区","徐汇区","长宁区","静安区","普陀区","虹口区","杨浦区","浦东新区","闵行区","宝山区"]},
+  "广东省":{"广州市":["天河区","越秀区","海珠区","荔湾区","白云区","黄埔区","番禺区","花都区","南沙区","增城区"],"深圳市":["福田区","罗湖区","南山区","宝安区","龙华区","龙岗区","坪山区","光明区","盐田区","大鹏新区"]},
+  "浙江省":{"杭州市":["上城区","下城区","西湖区","余杭区","萧山区","拱墅区","滨江区","富阳区","临安区","建德市"],"宁波市":["海曙区","江北区","镇海区","北仑区","鄞州区","奉化区","余姚市","慈溪市","象山县","宁海县"]},
+  "江苏省":{"南京市":["玄武区","秦淮区","建邺区","鼓楼区","浦口区","栖霞区","雨花台区","江宁区","六合区","溧水区"],"苏州市":["姑苏区","虎丘区","吴中区","相城区","吴江区","常熟市","张家港市","昆山市","太仓市"]},
+  "四川省":{"成都市":["锦江区","青羊区","金牛区","武侯区","成华区","龙泉驿区","青白江区","新都区","温江区","双流区"]},
+  "陕西省":{"西安市":["新城区","碑林区","莲湖区","灞桥区","未央区","雁塔区","阎良区","临潼区","长安区","高陵区"]},
+  "湖北省":{"武汉市":["江岸区","江汉区","硚口区","汉阳区","武昌区","青山区","洪山区","蔡甸区","江夏区","黄陂区"]},
+  "福建省":{"厦门市":["思明区","湖里区","集美区","海沧区","同安区","翔安区"],"福州市":["鼓楼区","台江区","仓山区","马尾区","晋安区","长乐区","闽侯县","连江县"]},
+  "云南省":{"昆明市":["五华区","盘龙区","官渡区","西山区","东川区","呈贡区","晋宁区"],"丽江市":["古城区","玉龙县","永胜县","华坪县","宁蒗县"]},
+  "海南省":{"三亚市":["海棠区","吉阳区","天涯区","崖州区"],"海口市":["秀英区","龙华区","琼山区","美兰区"]},
+};
+
+// ============ SPOTS DATA (mock, real data from AMap POI API) ============
+const spotsData = {
+  all:[
+    {id:1,name:"外滩风景区",cat:"culture",emoji:"🏛",rating:"4.8",dist:"1.2km",tags:["热门","历史","打卡"],lat:31.2397,lng:121.4906,desc:"百年历史建筑群"},
+    {id:2,name:"豫园",cat:"culture",emoji:"🏯",rating:"4.6",dist:"1.5km",tags:["传统","园林"],lat:31.2271,lng:121.4927,desc:"明代古典园林"},
+    {id:3,name:"东方明珠",cat:"culture",emoji:"🗼",rating:"4.7",dist:"2.1km",tags:["地标","夜景","热门"],lat:31.2394,lng:121.4996,desc:"上海城市地标"},
+    {id:4,name:"陆家嘴绿地",cat:"park",emoji:"🌿",rating:"4.3",dist:"2.3km",tags:["公园","休闲"],lat:31.2376,lng:121.5016,desc:"金融区绿地公园"},
+    {id:5,name:"南京路步行街",cat:"food",emoji:"🛍",rating:"4.5",dist:"0.8km",tags:["美食","购物","热门"],lat:31.2361,lng:121.4714,desc:"百年商业街"},
+    {id:6,name:"世纪公园",cat:"park",emoji:"🌳",rating:"4.4",dist:"8.5km",tags:["公园","自然"],lat:31.2165,lng:121.5442,desc:"上海最大公园"},
+    {id:7,name:"新天地",cat:"night",emoji:"🌙",rating:"4.6",dist:"1.8km",tags:["夜生活","酒吧","网红"],lat:31.2212,lng:121.4731,desc:"时尚娱乐地标"},
+    {id:8,name:"上海迪士尼",cat:"natural",emoji:"🎡",rating:"4.9",dist:"35km",tags:["热门","亲子"],lat:31.1443,lng:121.6632,desc:"亚洲最大迪士尼"},
+  ]
+};
+
+// ============ INIT ============
+window.onload = function(){
+  populateProvinces();
+  renderSpots();
+  setTimeout(autoLocate, 600);
+  if(AMAP_KEY) loadAMap();
+};
+
+function loadAMap(){
+  window._AMapSecurityConfig = { securityJsCode: AMAP_SECRET };
+  const s = document.createElement('script');
+  s.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_KEY}&plugin=AMap.Geolocation,AMap.Driving,AMap.Transfer,AMap.Walking,AMap.PlaceSearch,AMap.Geocoder`;
+  s.onload = function(){
+    amapLoaded = true;
+    document.getElementById('mapMock').style.display = 'none';
+    document.getElementById('amap-container').style.display = 'block';
+    mapInstance = new AMap.Map('amap-container',{zoom:14,center:[currentLocation.lng,currentLocation.lat]});
+    initGeolocation();
+  };
+  document.head.appendChild(s);
+}
+
+// ============ GEOLOCATION ============
+function autoLocate(){
+  showBadge(true);
+  document.getElementById('autoSpinner').style.display='inline-block';
+
+  if(amapLoaded && mapInstance){
+    AMap.plugin('AMap.Geolocation', function(){
+      const geo = new AMap.Geolocation({ enableHighAccuracy:true, timeout:10000, needAddress:true });
+      mapInstance.addControl(geo);
+      geo.getCurrentPosition(function(status, result){
+        showBadge(false);
+        document.getElementById('autoSpinner').style.display='none';
+        if(status==='complete'){
+          const addr = result.addressComponent;
+          currentLocation = {
+            province: addr.province,
+            city: addr.city||addr.province,
+            district: addr.district,
+            lat: result.position.lat,
+            lng: result.position.lng
+          };
+          updateLocDisplay();
+          refreshSpotsByLocation();
+        } else {
+          showToast('定位失败，使用默认城市');
+        }
+      });
+    });
+  } else {
+    // Browser geolocation fallback
+    if(navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          currentLocation.lat = pos.coords.latitude;
+          currentLocation.lng = pos.coords.longitude;
+          showBadge(false);
+          document.getElementById('autoSpinner').style.display='none';
+          updateLocDisplay("已定位","GPS精确定位");
+          showToast('📍 定位成功');
+          renderSpots();
+        },
+        err => {
+          showBadge(false);
+          document.getElementById('autoSpinner').style.display='none';
+          updateLocDisplay(currentLocation.city, currentLocation.district+" (默认)");
+          showToast('使用默认城市：'+currentLocation.city);
+          renderSpots();
+        },
+        {timeout:8000}
+      );
+    } else {
+      showBadge(false);
+      document.getElementById('autoSpinner').style.display='none';
+      updateLocDisplay(currentLocation.city, currentLocation.district);
+      renderSpots();
+    }
+  }
+}
+
+function updateLocDisplay(city, district){
+  document.getElementById('locText').textContent = city||(currentLocation.city||currentLocation.province);
+  document.getElementById('locSub').textContent = district||currentLocation.district;
+}
+
+function refreshSpotsByLocation(){
+  updateLocDisplay();
+  renderSpots();
+  showToast('📍 已更新为：'+currentLocation.city+' '+currentLocation.district);
+}
+
+// ============ LOCATION DROPDOWN ============
+function toggleLocDropdown(){
+  document.getElementById('locDropdown').classList.toggle('open');
+}
+document.addEventListener('click',function(e){
+  if(!document.getElementById('locWidget').contains(e.target))
+    document.getElementById('locDropdown').classList.remove('open');
+});
+
+function populateProvinces(){
+  const sel = document.getElementById('selProvince');
+  Object.keys(regions).forEach(p=>{
+    const o = document.createElement('option');
+    o.value = p; o.textContent = p;
+    sel.appendChild(o);
+  });
+}
+function loadCities(){
+  const p = document.getElementById('selProvince').value;
+  const cityEl = document.getElementById('selCity');
+  const distEl = document.getElementById('selDistrict');
+  cityEl.innerHTML='<option value="">选择城市</option>';
+  distEl.innerHTML='<option value="">选择区域</option>';
+  distEl.disabled=true;
+  if(!p){cityEl.disabled=true;return;}
+  cityEl.disabled=false;
+  Object.keys(regions[p]).forEach(c=>{
+    const o=document.createElement('option');o.value=c;o.textContent=c;cityEl.appendChild(o);
+  });
+}
+function loadDistricts(){
+  const p=document.getElementById('selProvince').value;
+  const c=document.getElementById('selCity').value;
+  const distEl=document.getElementById('selDistrict');
+  distEl.innerHTML='<option value="">选择区域</option>';
+  if(!p||!c){distEl.disabled=true;return;}
+  distEl.disabled=false;
+  (regions[p][c]||[]).forEach(d=>{
+    const o=document.createElement('option');o.value=d;o.textContent=d;distEl.appendChild(o);
+  });
+}
+function confirmLocation(){
+  const p=document.getElementById('selProvince').value;
+  const c=document.getElementById('selCity').value;
+  const d=document.getElementById('selDistrict').value;
+  if(!p){showToast('请先选择省份');return;}
+  currentLocation.province=p;
+  currentLocation.city=c||p;
+  currentLocation.district=d||c||p;
+  updateLocDisplay(currentLocation.city,currentLocation.district);
+  document.getElementById('locDropdown').classList.remove('open');
+  renderSpots();
+  showToast('✅ 已切换至：'+currentLocation.city+(d?' '+d:''));
+
+  if(amapLoaded&&mapInstance){
+    AMap.plugin('AMap.Geocoder',function(){
+      const geo=new AMap.Geocoder();
+      geo.getLocation(currentLocation.city+(d?d:''),function(status,result){
+        if(status==='complete'&&result.geocodes.length){
+          const loc=result.geocodes[0].location;
+          mapInstance.setCenter([loc.lng,loc.lat]);
+          currentLocation.lat=loc.lat;
+          currentLocation.lng=loc.lng;
+        }
+      });
+    });
+  }
+}
+
+// ============ SPOTS RENDERING ============
+function filterCat(el, cat){
+  document.querySelectorAll('.cat-tag').forEach(e=>e.classList.remove('active'));
+  el.classList.add('active');
+  currentCat=cat;
+  renderSpots();
+}
+
+function renderSpots(){
+  const spots = getFilteredSpots();
+  const list = document.getElementById('spotsList');
+  document.getElementById('spotsCount').textContent=spots.length+' 个景点';
+  document.getElementById('spotsTitle').textContent=
+    currentLocation.city+'附近推荐';
+
+  list.innerHTML='';
+  spots.forEach(s=>{
+    const isAdded=routeStops.some(r=>r.id===s.id);
+    const div=document.createElement('div');
+    div.className='spot-card'+(isAdded?' selected':'');
+    div.id='card-'+s.id;
+    div.onclick=()=>selectSpot(s);
+    div.innerHTML=`
+      <div class="spot-img">${s.emoji}</div>
+      <div class="spot-info">
+        <div class="spot-name">${s.name}</div>
+        <div class="spot-meta">
+          <div class="spot-rating">★ ${s.rating}</div>
+          <div class="spot-dist">📍 ${s.dist}</div>
+        </div>
+        <div class="spot-tags">
+          ${s.tags.map(t=>`<span class="spot-tag${t==='热门'?' hot':''}">${t}</span>`).join('')}
+        </div>
+        <button class="add-route-btn${isAdded?' added':''}" id="btn-${s.id}"
+          onclick="event.stopPropagation();addToRoute(${s.id})">
+          ${isAdded?'✓ 已添加':'+  规划'}
+        </button>
+      </div>`;
+    list.appendChild(div);
+  });
+
+  renderMockPins(spots);
+}
+
+function getFilteredSpots(){
+  return spotsData.all.filter(s=>currentCat==='all'||s.cat===currentCat);
+}
+
+function searchSpots(){
+  const q=document.getElementById('searchInput').value.trim().toLowerCase();
+  if(!q){renderSpots();return;}
+  const list=document.getElementById('spotsList');
+  const found=spotsData.all.filter(s=>s.name.toLowerCase().includes(q)||s.desc.toLowerCase().includes(q)||s.tags.some(t=>t.includes(q)));
+  document.getElementById('spotsCount').textContent=found.length+' 个结果';
+  list.innerHTML='';
+  found.forEach(s=>{
+    const div=document.createElement('div');
+    div.className='spot-card';
+    div.innerHTML=`<div class="spot-img">${s.emoji}</div><div class="spot-info"><div class="spot-name">${s.name}</div><div class="spot-meta"><div class="spot-rating">★ ${s.rating}</div><div class="spot-dist">${s.dist}</div></div></div>`;
+    list.appendChild(div);
+  });
+  if(amapLoaded&&mapInstance){
+    AMap.plugin('AMap.PlaceSearch',function(){
+      const ps=new AMap.PlaceSearch({city:currentLocation.city,pageSize:8,map:mapInstance});
+      ps.search(q);
+    });
+  }
+}
+
+// ============ ROUTE PLANNING ============
+function addToRoute(id){
+  const s=spotsData.all.find(x=>x.id===id);
+  if(!s)return;
+  const idx=routeStops.findIndex(r=>r.id===id);
+  if(idx>=0){
+    routeStops.splice(idx,1);
+    showToast('已移除：'+s.name);
+  } else {
+    if(routeStops.length>=6){showToast('最多添加 6 个站点');return;}
+    routeStops.push(s);
+    showToast('✅ 已添加：'+s.name);
+  }
+  renderStops();
+  renderSpots();
+  document.getElementById('planRouteBtn').disabled=routeStops.length<2;
+}
+
+function renderStops(){
+  const el=document.getElementById('routeStops');
+  document.getElementById('routeStopsCount').textContent='已添加 '+routeStops.length+' 个站点';
+  if(!routeStops.length){
+    el.innerHTML='<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px 0">点击景点卡片的「+规划」按钮添加站点</div>';
+    return;
+  }
+  el.innerHTML=routeStops.map((s,i)=>`
+    <div class="route-stop">
+      <div class="stop-num">${i+1}</div>
+      <div class="stop-name">${s.name}</div>
+      <button class="stop-del" onclick="removeStop(${s.id})">×</button>
+    </div>`).join('');
+}
+
+function removeStop(id){
+  routeStops=routeStops.filter(s=>s.id!==id);
+  renderStops();
+  renderSpots();
+  document.getElementById('planRouteBtn').disabled=routeStops.length<2;
+  document.getElementById('routeInfo').classList.remove('show');
+}
+
+function setMode(el,mode){
+  document.querySelectorAll('.mode-tab').forEach(e=>e.classList.remove('active'));
+  el.classList.add('active');
+  currentMode=mode;
+}
+
+function setSort(el,sort){
+  document.querySelectorAll('.sort-tab').forEach(e=>e.classList.remove('active'));
+  el.classList.add('active');
+  currentSort=sort;
+}
+
+function planRoute(){
+  if(routeStops.length<2){showToast('请至少添加 2 个站点');return;}
+  document.getElementById('planRouteBtn').textContent='⏳ 规划中...';
+
+  if(amapLoaded&&mapInstance){
+    planRealRoute();
+  } else {
+    planMockRoute();
+  }
+}
+
+function planRealRoute(){
+  const pluginMap={driving:'AMap.Driving',transit:'AMap.Transfer',walking:'AMap.Walking'};
+  AMap.plugin(Object.values(pluginMap),function(){
+    let routeObj;
+    const sortMap={fastest:'LEAST_TIME',shortest:'LEAST_DISTANCE',economy:'REAL_TRAFFIC'};
+
+    if(currentMode==='driving'){
+      routeObj=new AMap.Driving({map:mapInstance,policy:AMap.DrivingPolicy[sortMap[currentSort]]||AMap.DrivingPolicy.LEAST_TIME});
+    } else if(currentMode==='transit'){
+      routeObj=new AMap.Transfer({map:mapInstance,city:currentLocation.city,policy:AMap.TransferPolicy.LEAST_TIME});
+    } else {
+      routeObj=new AMap.Walking({map:mapInstance});
+    }
+
+    const origin=[routeStops[0].lng,routeStops[0].lat];
+    const dest=[routeStops[routeStops.length-1].lng,routeStops[routeStops.length-1].lat];
+    const waypoints=routeStops.slice(1,-1).map(s=>new AMap.LngLat(s.lng,s.lat));
+
+    const cb=function(status,result){
+      document.getElementById('planRouteBtn').innerHTML='<span>🗺</span> 规划最优路线';
+      if(status==='complete'){
+        const r=result.routes?result.routes[0]:(result.plans?result.plans[0]:null);
+        if(r){
+          const dist=r.distance>=1000?(r.distance/1000).toFixed(1)+'km':r.distance+'m';
+          const mins=Math.round((r.time||r.duration||0)/60);
+          document.getElementById('riDist').textContent=dist;
+          document.getElementById('riTime').textContent=mins+'分钟';
+          document.getElementById('riStops').textContent=routeStops.length+'站';
+          document.getElementById('routeInfo').classList.add('show');
+        }
+      } else { showToast('路线规划失败，请检查 API Key'); }
+    };
+
+    if(currentMode==='driving'&&waypoints.length){
+      routeObj.search(origin,dest,{waypoints},cb);
+    } else {
+      routeObj.search(origin,dest,cb);
+    }
+  });
+}
+
+function planMockRoute(){
+  // Calculate approximate distance
+  let totalDist=0;
+  for(let i=0;i<routeStops.length-1;i++){
+    const a=routeStops[i],b=routeStops[i+1];
+    totalDist+=Math.sqrt(Math.pow((a.lat-b.lat)*111,2)+Math.pow((a.lng-b.lng)*111*Math.cos(a.lat*Math.PI/180),2));
+  }
+  const speedMap={driving:50,transit:30,walking:5};
+  const speed=speedMap[currentMode];
+  const dist=totalDist.toFixed(1);
+  const sortFactor={fastest:1,shortest:0.85,economy:0.92}[currentSort];
+  const time=Math.round(totalDist/speed*60*sortFactor);
+
+  setTimeout(()=>{
+    document.getElementById('planRouteBtn').innerHTML='<span>🗺</span> 规划最优路线';
+    document.getElementById('riDist').textContent=dist+'km';
+    document.getElementById('riTime').textContent=time+'分钟';
+    document.getElementById('riStops').textContent=routeStops.length+'站';
+    document.getElementById('routeInfo').classList.add('show');
+    showToast('✅ 路线已规划 (配置 Key 后显示实际路线)');
+    renderMockRoutePins();
+  },800);
+}
+
+// ============ MAP PINS MOCK ============
+function renderMockPins(spots){
+  const container=document.getElementById('mapPins');
+  const mock=document.getElementById('mapMock');
+  if(!container||!mock)return;
+  container.innerHTML='';
+  const W=mock.offsetWidth||800, H=mock.offsetHeight||600;
+  const lats=spots.map(s=>s.lat),lngs=spots.map(s=>s.lng);
+  const minLat=Math.min(...lats),maxLat=Math.max(...lats);
+  const minLng=Math.min(...lngs),maxLng=Math.max(...lngs);
+  const latRange=maxLat-minLat||0.05,lngRange=maxLng-minLng||0.05;
+
+  spots.forEach(s=>{
+    const x=((s.lng-minLng)/lngRange)*0.7*W+0.15*W;
+    const y=((maxLat-s.lat)/latRange)*0.6*H+0.2*H;
+    const isRoute=routeStops.some(r=>r.id===s.id);
+    const pin=document.createElement('div');
+    pin.className='map-pin';
+    pin.style.left=x+'px';pin.style.top=y+'px';
+    pin.innerHTML=`<div class="pin-inner${isRoute?' selected':''}" style="position:relative">${s.name}</div>`;
+    pin.onclick=()=>addToRoute(s.id);
+    container.appendChild(pin);
+  });
+}
+
+function renderMockRoutePins(){
+  renderMockPins(getFilteredSpots());
+}
+
+function selectSpot(s){
+  document.querySelectorAll('.spot-card').forEach(c=>c.classList.remove('selected'));
+  document.getElementById('card-'+s.id)?.classList.add('selected');
+  if(amapLoaded&&mapInstance) mapInstance.setCenter([s.lng,s.lat]);
+}
+
+// ============ UTILS ============
+function showBadge(v){document.getElementById('locatingBadge').style.display=v?'flex':'none';}
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+// init map pins on resize
+window.addEventListener('resize',()=>{if(!amapLoaded)renderMockPins(getFilteredSpots());});
+setTimeout(()=>renderMockPins(spotsData.all),300);
+</script>
+</body>
+</html>
